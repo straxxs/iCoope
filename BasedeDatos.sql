@@ -543,13 +543,22 @@ CREATE TABLE opcion_encuesta (
         UNIQUE (id_encuesta, texto)
 ) ENGINE=InnoDB;
 
-
 CREATE TABLE voto (
     id_voto INT AUTO_INCREMENT PRIMARY KEY,
+    id_encuesta INT NOT NULL,
     id_opcion INT NOT NULL,
     id_usuario INT NOT NULL,
 
     fecha_voto DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT uq_voto_encuesta_usuario
+        UNIQUE (id_encuesta, id_usuario),
+
+    CONSTRAINT fk_voto_encuesta
+        FOREIGN KEY (id_encuesta)
+        REFERENCES encuesta(id_encuesta)
+        ON DELETE CASCADE
+        ON UPDATE CASCADE,
 
     CONSTRAINT fk_voto_opcion
         FOREIGN KEY (id_opcion)
