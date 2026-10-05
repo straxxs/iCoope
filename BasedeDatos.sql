@@ -545,20 +545,13 @@ CREATE TABLE opcion_encuesta (
 
 CREATE TABLE voto (
     id_voto INT AUTO_INCREMENT PRIMARY KEY,
-    id_encuesta INT NOT NULL,
     id_opcion INT NOT NULL,
     id_usuario INT NOT NULL,
 
     fecha_voto DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
-    CONSTRAINT uq_voto_encuesta_usuario
-        UNIQUE (id_encuesta, id_usuario),
-
-    CONSTRAINT fk_voto_encuesta
-        FOREIGN KEY (id_encuesta)
-        REFERENCES encuesta(id_encuesta)
-        ON DELETE CASCADE
-        ON UPDATE CASCADE,
+    CONSTRAINT uq_voto_usuario_encuesta
+        UNIQUE (id_usuario, id_opcion),
 
     CONSTRAINT fk_voto_opcion
         FOREIGN KEY (id_opcion)
@@ -572,7 +565,6 @@ CREATE TABLE voto (
         ON DELETE CASCADE
         ON UPDATE CASCADE
 ) ENGINE=InnoDB;
-
 
 -- ============================================================
 -- 14. ÍNDICES PARA MEJORAR CONSULTAS
