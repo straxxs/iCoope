@@ -1,15 +1,15 @@
 -- ============================================================
--- ICOPE - MODELO FÍSICO DE BASE DE DATOS
+-- ICOOPE - MODELO FÍSICO DE BASE DE DATOS
 -- MariaDB
 -- Modelo relacional normalizado hasta 3FN
 -- ============================================================
 
-DROP DATABASE IF EXISTS icope;
-CREATE DATABASE icope
+DROP DATABASE IF EXISTS icoope;
+CREATE DATABASE icoope
     CHARACTER SET utf8mb4
     COLLATE utf8mb4_unicode_ci;
 
-USE icope;
+USE icoope;
 
 -- ============================================================
 -- 1. USUARIOS Y ROLES

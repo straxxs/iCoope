@@ -1,59 +1,53 @@
 from contextlib import contextmanager
-from typing import Iterator
 
 import pymysql
-from flask import Flask, current_app, g
-from pymysql.connections import Connection
+from flask import current_app, g
 from pymysql.cursors import DictCursor
 
 
-def get_db() -> Connection:
-    """Obtiene la conexión asociada al contexto actual de Flask."""
-    if "db_connection" not in g:
-        config = current_app.config
+def get_db():
+    if "db" not in g:
+        g.db = pymysql.connect(
+            host=current_app.config["DB_HOST"],
+            port=current_app.config["DB_PORT"],
+            user=current_app.config["DB_USER"],
+            password=current_app.config["DB_PASSWORD"],
+            database=current_app.config["DB_NAME"],
+            charset="utf8mb4",
+            cursorclass=DictCursor,
+            autocommit=False,
+            connect_timeout=current_app.config["DB_CONNECT_TIMEOUT"],
+            read_timeout=current_app.config["DB_READ_TIMEOUT"],
+            write_timeout=current_app.config["DB_WRITE_TIMEOUT"],
+        )
 
-        connection_options = {
-            "host": config["DB_HOST"],
-            "port": config["DB_PORT"],
-            "user": config["DB_USER"],
-            "password": config["DB_PASSWORD"],
-            "database": config["DB_NAME"],
-            "charset": "utf8mb4",
-            "cursorclass": DictCursor,
-            "autocommit": False,
-            "connect_timeout": config["DB_CONNECT_TIMEOUT"],
-            "read_timeout": config["DB_READ_TIMEOUT"],
-            "write_timeout": config["DB_WRITE_TIMEOUT"],
-        }
+    return g.db
 
-        if config.get("DB_SSL_CA"):
-            connection_options.update(
-                ssl_ca=config["DB_SSL_CA"],
-                ssl_verify_cert=True,
-                ssl_verify_identity=True,
-            )
 
-        g.db_connection = pymysql.connect(**connection_options)
+def fetch_one(sql, params=()):
+    with get_db().cursor() as cursor:
+        cursor.execute(sql, params)
+        return cursor.fetchone()
 
-    return g.db_connection
+
+def fetch_all(sql, params=()):
+    with get_db().cursor() as cursor:
+        cursor.execute(sql, params)
+        return cursor.fetchall()
 
 
 @contextmanager
-def transaction() -> Iterator[Connection]:
-    """
-    Confirma los cambios al completar el bloque.
-
-    Si ocurre un error, revierte la transacción y propaga la excepción.
-    No permite transacciones anidadas.
-    """
-    if g.get("db_transaction_active", False):
+def transaction():
+    if g.get("transaction_active", False):
         raise RuntimeError("No se permiten transacciones anidadas.")
 
     connection = get_db()
-    g.db_transaction_active = True
+    g.transaction_active = True
 
     try:
-        yield connection
+        with connection.cursor() as cursor:
+            yield cursor
+
         connection.commit()
     except BaseException:
         try:
@@ -64,33 +58,30 @@ def transaction() -> Iterator[Connection]:
             )
         raise
     finally:
-        g.pop("db_transaction_active", None)
+        g.pop("transaction_active", None)
 
 
-def close_db(exception: BaseException | None = None) -> None:
-    """Libera la conexión al finalizar el contexto de aplicación."""
-    connection = g.pop("db_connection", None)
-    g.pop("db_transaction_active", None)
+def close_db(exception=None):
+    connection = g.pop("db", None)
+    g.pop("transaction_active", None)
 
     if connection is None:
         return
 
     try:
-        # Evita dejar cambios sin confirmar, incluso si no hubo excepción.
         connection.rollback()
     except pymysql.MySQLError:
         current_app.logger.exception(
-            "Error al revertir operaciones pendientes durante el cierre."
+            "Error al revertir operaciones pendientes."
         )
     finally:
         try:
             connection.close()
         except pymysql.MySQLError:
             current_app.logger.exception(
-                "Error al cerrar la conexión a la base de datos."
+                "Error al cerrar la conexión."
             )
 
 
-def init_app(app: Flask) -> None:
-    """Registra la limpieza automática de conexiones."""
+def init_app(app):
     app.teardown_appcontext(close_db)

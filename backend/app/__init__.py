@@ -1,61 +1,35 @@
-from flask import Blueprint, Flask, jsonify
+from datetime import date, datetime
+from decimal import Decimal
+
+from flask import Flask, jsonify
+from flask.json.provider import DefaultJSONProvider
 from flask_cors import CORS
 
 from config import Config
-from . import db
+
+from . import auth, catalog, community, db, errors, events, payments
 
 
-def create_health_blueprint() -> Blueprint:
-    blueprint = Blueprint("health", __name__, url_prefix="/api")
+class APIJSONProvider(DefaultJSONProvider):
+    @staticmethod
+    def default(value):
+        if isinstance(value, (datetime, date)):
+            return value.isoformat()
 
-    @blueprint.get("/health")
-    def health():
-        # Comprueba que el servidor responde, sin abrir una conexión SQL.
-        return jsonify(
-            status="ok",
-            service="school-commerce-api",
-        ), 200
+        if isinstance(value, Decimal):
+            return str(value)
 
-    return blueprint
+        return DefaultJSONProvider.default(value)
 
 
-def validate_config(app: Flask) -> None:
-    required_keys = (
-        "SECRET_KEY",
-        "DB_NAME",
-        "DB_USER",
-    )
-
-    missing_keys = [
-        key
-        for key in required_keys
-        if app.config.get(key) is None or app.config.get(key) == ""
-    ]
-
-    # Una cadena vacía es válida para ciertas instalaciones locales.
-    # None significa que DB_PASSWORD no fue definida.
-    if app.config.get("DB_PASSWORD") is None:
-        missing_keys.append("DB_PASSWORD")
-
-    if missing_keys:
-        raise RuntimeError(
-            "Faltan variables de configuración: "
-            + ", ".join(missing_keys)
-        )
-
-    if not 1 <= app.config["DB_PORT"] <= 65535:
-        raise RuntimeError("DB_PORT debe estar entre 1 y 65535.")
-
-def create_app(config_overrides: dict | None = None) -> Flask:
+def create_app(config_overrides=None):
     app = Flask(__name__, static_folder=None)
+    app.json = APIJSONProvider(app)
 
     app.config.from_object(Config)
 
-    # Permite ajustar la configuración en pruebas sin cambiar el entorno.
-    if config_overrides is not None:
+    if config_overrides:
         app.config.update(config_overrides)
-
-    validate_config(app)
 
     CORS(
         app,
@@ -64,17 +38,33 @@ def create_app(config_overrides: dict | None = None) -> Flask:
                 "origins": app.config["CORS_ORIGINS"],
             }
         },
-        methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-        allow_headers=["Content-Type", "Authorization"],
+        allow_headers=[
+            "Content-Type",
+            "Authorization",
+            "X-Simulation-Key",
+        ],
+        methods=[
+            "GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"
+        ],
         supports_credentials=False,
     )
 
     db.init_app(app)
+    errors.init_app(app)
+    auth.init_app(app)
 
-    app.register_blueprint(create_health_blueprint())
+    app.register_blueprint(auth.bp)
+    app.register_blueprint(catalog.bp)
+    app.register_blueprint(events.bp)
+    app.register_blueprint(community.bp)
+    app.register_blueprint(payments.bp)
 
-    # Registrar aquí los blueprints de los futuros módulos:
-    # from .modules.products.routes import products_bp
-    # app.register_blueprint(products_bp, url_prefix="/api/products")
+    @app.get("/api/health")
+    def health():
+        return jsonify(
+            status="ok",
+            service="icoope-api",
+            pagos="simulados",
+        )
 
     return app
