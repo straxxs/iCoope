@@ -9,6 +9,9 @@ from config import Config
 
 from . import auth, catalog, community, db, errors, events, payments, users
 
+from pathlib import Path
+from flask import send_from_directory
+
 class APIJSONProvider(DefaultJSONProvider):
     @staticmethod
     def default(value):
@@ -66,5 +69,15 @@ def create_app(config_overrides=None):
             service="icoope-api",
             pagos="simulados",
         )
+
+    FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend"
+
+    @app.get("/")
+    def index():
+        return send_from_directory(FRONTEND_DIR, "login.html")
+
+    @app.get("/<path:filename>")
+    def frontend_files(filename):
+        return send_from_directory(FRONTEND_DIR, filename)
 
     return app
