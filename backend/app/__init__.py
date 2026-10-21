@@ -7,8 +7,7 @@ from flask_cors import CORS
 
 from config import Config
 
-from . import auth, catalog, community, db, errors, events, payments
-
+from . import auth, catalog, community, db, errors, events, payments, users
 
 class APIJSONProvider(DefaultJSONProvider):
     @staticmethod
@@ -58,6 +57,7 @@ def create_app(config_overrides=None):
     app.register_blueprint(events.bp)
     app.register_blueprint(community.bp)
     app.register_blueprint(payments.bp)
+    app.register_blueprint(users.bp)
 
     @app.get("/api/health")
     def health():

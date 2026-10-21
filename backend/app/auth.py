@@ -300,6 +300,9 @@ def assign_roles(user_id):
 
     names = sorted(set(names))
 
+    if user_id == g.current_user["id_usuario"] and "ADMIN" not in names:
+        raise APIError("No puedes quitarte tu propio rol ADMIN.", 409)
+
     with transaction() as cursor:
         cursor.execute(
             "SELECT id_usuario FROM usuario WHERE id_usuario = %s "
