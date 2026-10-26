@@ -36,6 +36,7 @@ def post_values(data):
 
 
 @bp.get("/posts")
+@bp.get("/v1/foro")
 def posts():
     page, limit, offset = pagination()
     condition = "publicado = TRUE"
@@ -105,6 +106,7 @@ def get_post(post_id):
 
 
 @bp.post("/posts")
+@bp.post("/v1/foro")
 @roles_required(*PUBLISHERS)
 def create_post():
     data = body({"titulo", "contenido", "urgente", "publicado"})

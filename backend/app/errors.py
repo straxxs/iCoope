@@ -4,16 +4,17 @@ from werkzeug.exceptions import HTTPException
 
 
 class APIError(Exception):
-    def __init__(self, message, status=400):
+    def __init__(self, message, status=400, extra=None):
         super().__init__(message)
         self.message = message
         self.status = status
+        self.extra = extra or {}
 
 
 def init_app(app):
     @app.errorhandler(APIError)
     def api_error(error):
-        response = jsonify(error=error.message)
+        response = jsonify(error=error.message, **error.extra)
         response.status_code = error.status
 
         if error.status == 401:

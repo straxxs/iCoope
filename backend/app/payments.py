@@ -5,7 +5,7 @@ from uuid import uuid4
 from flask import Blueprint, current_app, g, jsonify, request
 
 from .auth import is_admin, jwt_required, roles_required
-from .db import fetch_all, fetch_one, transaction
+from .db import fetch_all, fetch_one, transaction, get_db
 from .errors import APIError
 from .utils import body, integer, pagination, require_row
 
@@ -13,17 +13,25 @@ from .utils import body, integer, pagination, require_row
 bp = Blueprint("payments", __name__, url_prefix="/api")
 
 
+MANAGER_ROLES = {"ADMIN", "COOPERADORA", "STAFF"}
+
 def ensure_simulation():
     if not current_app.config["SIMULATED_PAYMENTS_ENABLED"]:
         raise APIError("Los pagos simulados están deshabilitados.", 403)
 
 
-def check_order_access(order):
-    if (
-        order["id_usuario"] != g.current_user["id_usuario"]
-        and not is_admin()
-    ):
-        raise APIError("No puedes acceder a este pedido.", 403)
+def is_manager():
+    return bool(MANAGER_ROLES.intersection(g.current_user["roles"]))
+
+
+def check_order_access(order, allow_staff=False):
+    if order["id_usuario"] == g.current_user["id_usuario"]:
+        return
+
+    if is_admin() or (allow_staff and is_manager()):
+        return
+
+    raise APIError("No puedes acceder a este pedido.", 403)
 
 
 def order_detail(order_id):
@@ -34,7 +42,7 @@ def order_detail(order_id):
         ),
         "Pedido no encontrado.",
     )
-    check_order_access(order)
+    check_order_access(order, allow_staff=True)
 
     details = fetch_all(
         """
@@ -98,7 +106,83 @@ def restore_stock(cursor, order_id):
             "WHERE id_variante = %s",
             (stock, detail["id_variante"]),
         )
+EXPIRY_PREFIXES = ("/api/products", "/api/orders", "/api/payments")
 
+
+def release_expired_orders(limit=50):
+    """Cancela pedidos PENDING vencidos y devuelve su stock."""
+    expired = fetch_all(
+        """
+        SELECT id_pedido FROM pedido
+        WHERE estado = 'PENDING'
+          AND fecha_vencimiento_reserva IS NOT NULL
+          AND fecha_vencimiento_reserva <= NOW()
+        ORDER BY id_pedido
+        LIMIT %s
+        """,
+        (limit,),
+    )
+
+    if not expired:
+        get_db().commit()  # cierra el snapshot de la lectura
+        return 0
+
+    released = 0
+
+    # Un pedido por transacción: evita bloqueos cruzados.
+    for row in expired:
+        with transaction() as cursor:
+            cursor.execute(
+                """
+                SELECT id_pedido FROM pedido
+                WHERE id_pedido = %s
+                  AND estado = 'PENDING'
+                  AND fecha_vencimiento_reserva <= NOW()
+                FOR UPDATE
+                """,
+                (row["id_pedido"],),
+            )
+
+            if cursor.fetchone() is None:
+                continue  # otro proceso ya lo resolvió
+
+            restore_stock(cursor, row["id_pedido"])
+
+            cursor.execute(
+                "UPDATE pedido SET estado = 'CANCELLED' "
+                "WHERE id_pedido = %s",
+                (row["id_pedido"],),
+            )
+            cursor.execute(
+                "UPDATE pago SET estado = 'CANCELLED' "
+                "WHERE id_pedido = %s AND estado = 'PENDING'",
+                (row["id_pedido"],),
+            )
+            released += 1
+
+    return released
+
+
+@bp.before_app_request
+def release_expired_before_request():
+    if request.method == "OPTIONS":
+        return
+
+    if not request.path.startswith(EXPIRY_PREFIXES):
+        return
+
+    try:
+        release_expired_orders()
+    except Exception:
+        current_app.logger.exception(
+            "No se pudieron liberar las reservas vencidas."
+        )
+
+
+@bp.post("/orders/release-expired")
+@roles_required("ADMIN", "COOPERADORA")
+def release_expired_endpoint():
+    return jsonify(liberados=release_expired_orders(limit=500))
 
 @bp.post("/orders")
 @jwt_required
@@ -173,8 +257,14 @@ def create_order():
             raise APIError("El pedido supera el importe permitido.")
 
         cursor.execute(
-            "INSERT INTO pedido (id_usuario) VALUES (%s)",
-            (g.current_user["id_usuario"],),
+            """
+            INSERT INTO pedido (id_usuario, fecha_vencimiento_reserva)
+            VALUES (%s, NOW() + INTERVAL %s MINUTE)
+            """,
+            (
+                g.current_user["id_usuario"],
+                current_app.config["RESERVATION_MINUTES"],
+            ),
         )
         order_id = cursor.lastrowid
 
@@ -202,21 +292,41 @@ def create_order():
 @jwt_required
 def list_orders():
     page, limit, offset = pagination()
+    conditions, params = [], []
+
+    if request.args.get("todos") == "true":
+        if not is_manager():
+            raise APIError("No tienes permisos.", 403)
+    else:
+        conditions.append("id_usuario = %s")
+        params.append(g.current_user["id_usuario"])
+
+    estado = request.args.get("estado")
+
+    if estado:
+        if estado not in {
+            "PENDING", "APPROVED", "REJECTED",
+            "CANCELLED", "READY", "DELIVERED",
+        }:
+            raise APIError("Estado de pedido no válido.")
+
+        conditions.append("estado = %s")
+        params.append(estado)
+
+    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
 
     return jsonify(
         pedidos=fetch_all(
-            """
-            SELECT * FROM pedido
-            WHERE id_usuario = %s
+            f"""
+            SELECT * FROM pedido {where}
             ORDER BY id_pedido DESC
             LIMIT %s OFFSET %s
             """,
-            (g.current_user["id_usuario"], limit, offset),
+            tuple(params + [limit, offset]),
         ),
         page=page,
         per_page=limit,
     )
-
 
 @bp.get("/orders/<int:order_id>")
 @jwt_required

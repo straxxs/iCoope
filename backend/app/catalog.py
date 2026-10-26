@@ -20,6 +20,10 @@ bp = Blueprint("catalog", __name__, url_prefix="/api")
 MANAGERS = ("ADMIN", "COOPERADORA", "STAFF")
 
 
+# ----------------------------------------------------------------------
+# Categorías
+# ----------------------------------------------------------------------
+
 @bp.get("/categories")
 def categories():
     return jsonify(
@@ -59,6 +63,84 @@ def create_category():
         )
     ), 201
 
+
+@bp.patch("/categories/<int:category_id>")
+@roles_required(*MANAGERS)
+def update_category(category_id):
+    data = body({"nombre", "descripcion"})
+
+    with transaction() as cursor:
+        cursor.execute(
+            "SELECT * FROM categoria WHERE id_categoria = %s "
+            "FOR UPDATE",
+            (category_id,),
+        )
+        current = require_row(
+            cursor.fetchone(),
+            "Categoría no encontrada.",
+        )
+        current.update(data)
+
+        cursor.execute(
+            """
+            UPDATE categoria
+            SET nombre = %s, descripcion = %s
+            WHERE id_categoria = %s
+            """,
+            (
+                text(current.get("nombre"), "nombre", 100),
+                text(
+                    current.get("descripcion"),
+                    "descripcion",
+                    255,
+                    optional=True,
+                ),
+                category_id,
+            ),
+        )
+
+    return jsonify(
+        categoria=fetch_one(
+            "SELECT * FROM categoria WHERE id_categoria = %s",
+            (category_id,),
+        )
+    )
+
+
+@bp.delete("/categories/<int:category_id>")
+@roles_required(*MANAGERS)
+def delete_category(category_id):
+    with transaction() as cursor:
+        cursor.execute(
+            "SELECT id_categoria FROM categoria "
+            "WHERE id_categoria = %s FOR UPDATE",
+            (category_id,),
+        )
+        require_row(cursor.fetchone(), "Categoría no encontrada.")
+
+        cursor.execute(
+            "SELECT COUNT(*) AS total FROM producto "
+            "WHERE id_categoria = %s",
+            (category_id,),
+        )
+
+        if cursor.fetchone()["total"] > 0:
+            raise APIError(
+                "La categoría tiene productos asociados.",
+                409,
+            )
+
+        cursor.execute(
+            "DELETE FROM categoria WHERE id_categoria = %s",
+            (category_id,),
+        )
+
+    return jsonify(message="Categoría eliminada.")
+
+
+# ----------------------------------------------------------------------
+# Productos
+# ----------------------------------------------------------------------
 
 def product_values(data):
     event = boolean(data.get("es_evento", False), "es_evento")
@@ -119,13 +201,32 @@ def product_detail(product_id, only_active=True):
         (product_id,),
     )
 
+    product["stock_total"] = sum(
+        variant["stock"] for variant in product["variantes"]
+    )
+
+    # Para entradas, el stock de las variantes es el aforo disponible.
+    if product["es_evento"]:
+        product["lugares_disponibles"] = product["stock_total"]
+
     return product
 
 
-@bp.get("/products")
-def products():
+def query_flag(name):
+    value = request.args.get(name)
+
+    if value is None:
+        return None
+
+    if value not in {"true", "false"}:
+        raise APIError(f"{name} debe ser true o false.")
+
+    return value == "true"
+
+
+def list_products(only_active):
     page, limit, offset = pagination()
-    conditions = ["p.activo = TRUE"]
+    conditions = ["p.activo = TRUE"] if only_active else []
     params = []
 
     category = request.args.get("id_categoria")
@@ -139,14 +240,20 @@ def products():
         conditions.append("p.id_categoria = %s")
         params.append(integer(category_id, "id_categoria"))
 
-    event = request.args.get("es_evento")
+    event = query_flag("es_evento")
 
     if event is not None:
-        if event not in {"true", "false"}:
-            raise APIError("es_evento debe ser true o false.")
-
         conditions.append("p.es_evento = %s")
-        params.append(event == "true")
+        params.append(event)
+
+    in_stock = query_flag("con_stock")
+
+    if in_stock is not None:
+        conditions.append(
+            ("" if in_stock else "NOT ")
+            + "EXISTS (SELECT 1 FROM variante_producto v "
+            "WHERE v.id_producto = p.id_producto AND v.stock > 0)"
+        )
 
     search = request.args.get("q")
 
@@ -154,11 +261,15 @@ def products():
         conditions.append("p.nombre LIKE %s")
         params.append(f"%{text(search, 'q', 150)}%")
 
-    where = " AND ".join(conditions)
+    where = " AND ".join(conditions) or "TRUE"
 
     rows = fetch_all(
         f"""
-        SELECT p.*, c.nombre AS categoria
+        SELECT p.*, c.nombre AS categoria,
+               COALESCE((
+                   SELECT SUM(v.stock) FROM variante_producto v
+                   WHERE v.id_producto = p.id_producto
+               ), 0) AS stock_total
         FROM producto p
         JOIN categoria c ON c.id_categoria = p.id_categoria
         WHERE {where}
@@ -171,6 +282,7 @@ def products():
     for row in rows:
         row["activo"] = bool(row["activo"])
         row["es_evento"] = bool(row["es_evento"])
+        row["stock_total"] = int(row["stock_total"])
 
     total = fetch_one(
         f"SELECT COUNT(*) AS total FROM producto p WHERE {where}",
@@ -185,9 +297,28 @@ def products():
     )
 
 
+@bp.get("/products")
+def products():
+    return list_products(only_active=True)
+
+
 @bp.get("/products/<int:product_id>")
 def get_product(product_id):
     return jsonify(producto=product_detail(product_id))
+
+
+@bp.get("/admin/products")
+@roles_required(*MANAGERS)
+def admin_products():
+    return list_products(only_active=False)
+
+
+@bp.get("/admin/products/<int:product_id>")
+@roles_required(*MANAGERS)
+def admin_get_product(product_id):
+    return jsonify(
+        producto=product_detail(product_id, only_active=False)
+    )
 
 
 @bp.post("/products")
@@ -276,6 +407,10 @@ def deactivate_product(product_id):
     return jsonify(message="Producto desactivado.")
 
 
+# ----------------------------------------------------------------------
+# Variantes e inventario
+# ----------------------------------------------------------------------
+
 @bp.post("/products/<int:product_id>/variants")
 @roles_required(*MANAGERS)
 def create_variant(product_id):
@@ -305,6 +440,66 @@ def create_variant(product_id):
             (variant_id,),
         )
     ), 201
+
+
+@bp.patch("/variants/<int:variant_id>")
+@roles_required(*MANAGERS)
+def update_variant(variant_id):
+    data = body({"nombre"})
+    name = text(data.get("nombre"), "nombre", 100)
+
+    with transaction() as cursor:
+        cursor.execute(
+            "SELECT id_variante FROM variante_producto "
+            "WHERE id_variante = %s FOR UPDATE",
+            (variant_id,),
+        )
+        require_row(cursor.fetchone(), "Variante no encontrada.")
+
+        cursor.execute(
+            "UPDATE variante_producto SET nombre = %s "
+            "WHERE id_variante = %s",
+            (name, variant_id),
+        )
+
+    return jsonify(
+        variante=fetch_one(
+            "SELECT * FROM variante_producto WHERE id_variante = %s",
+            (variant_id,),
+        )
+    )
+
+
+@bp.delete("/variants/<int:variant_id>")
+@roles_required(*MANAGERS)
+def delete_variant(variant_id):
+    with transaction() as cursor:
+        cursor.execute(
+            "SELECT id_variante FROM variante_producto "
+            "WHERE id_variante = %s FOR UPDATE",
+            (variant_id,),
+        )
+        require_row(cursor.fetchone(), "Variante no encontrada.")
+
+        cursor.execute(
+            "SELECT 1 FROM detalle_pedido "
+            "WHERE id_variante = %s LIMIT 1",
+            (variant_id,),
+        )
+
+        if cursor.fetchone() is not None:
+            raise APIError(
+                "La variante tiene pedidos asociados. "
+                "Pon su stock en 0 o desactiva el producto.",
+                409,
+            )
+
+        cursor.execute(
+            "DELETE FROM variante_producto WHERE id_variante = %s",
+            (variant_id,),
+        )
+
+    return jsonify(message="Variante eliminada.")
 
 
 @bp.patch("/variants/<int:variant_id>/stock")
@@ -342,12 +537,21 @@ def adjust_stock(variant_id):
     )
 
 
+# ----------------------------------------------------------------------
+# Imágenes
+# ----------------------------------------------------------------------
+
 @bp.post("/products/<int:product_id>/images")
 @roles_required(*MANAGERS)
 def add_image(product_id):
     data = body({"url_imagen", "orden"})
     url = text(data.get("url_imagen"), "url_imagen", 500)
     order = integer(data.get("orden", 1), "orden")
+
+    if not url.startswith(("http://", "https://", "/")):
+        raise APIError(
+            "url_imagen debe ser http(s) o una ruta que empiece con /."
+        )
 
     with transaction() as cursor:
         cursor.execute(
@@ -366,3 +570,60 @@ def add_image(product_id):
         image_id = cursor.lastrowid
 
     return jsonify(id_imagen=image_id), 201
+
+
+@bp.delete("/images/<int:image_id>")
+@roles_required(*MANAGERS)
+def delete_image(image_id):
+    with transaction() as cursor:
+        cursor.execute(
+            "SELECT id_imagen FROM producto_imagen "
+            "WHERE id_imagen = %s FOR UPDATE",
+            (image_id,),
+        )
+        require_row(cursor.fetchone(), "Imagen no encontrada.")
+
+        cursor.execute(
+            "DELETE FROM producto_imagen WHERE id_imagen = %s",
+            (image_id,),
+        )
+
+    return jsonify(message="Imagen eliminada.")
+
+@bp.get("/inventory")
+@roles_required(*MANAGERS)
+def inventory():
+    page, limit, offset = pagination()
+    conditions = ["p.activo = TRUE"]
+    params = []
+
+    max_stock = request.args.get("max_stock")
+
+    if max_stock is not None:
+        try:
+            threshold = int(max_stock)
+        except ValueError:
+            raise APIError("max_stock debe ser un entero.")
+
+        conditions.append("v.stock <= %s")
+        params.append(integer(threshold, "max_stock", minimum=0))
+
+    where = " AND ".join(conditions)
+
+    rows = fetch_all(
+        f"""
+        SELECT v.id_variante, v.nombre AS variante, v.stock,
+               p.id_producto, p.nombre AS producto, p.es_evento
+        FROM variante_producto v
+        JOIN producto p ON p.id_producto = v.id_producto
+        WHERE {where}
+        ORDER BY v.stock, v.id_variante
+        LIMIT %s OFFSET %s
+        """,
+        tuple(params + [limit, offset]),
+    )
+
+    for row in rows:
+        row["es_evento"] = bool(row["es_evento"])
+
+    return jsonify(inventario=rows, page=page, per_page=limit)
