@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Inicio | iCoope</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=Public+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/login.css">
+  <link rel="stylesheet" href="css/index.css">
+</head>
+<body class="app">
+  <header class="topbar">
+    <a class="logo" href="#novedades" aria-label="iCoope, inicio">i<span>Coope</span></a>
+    <nav class="nav" aria-label="Secciones">
+      <a href="#novedades" data-view="novedades">Novedades</a>
+      <a href="#tienda" data-view="tienda">Tienda</a>
+      <a href="#calendario" data-view="calendario">Calendario</a>
+      <a href="#cuenta" data-view="cuenta">Mi cuenta</a>
+      <a href="#transparencia" data-view="transparencia">Transparencia</a>
+    </nav>
+    <div class="auth" id="auth"></div>
+  </header>
+
+  <main class="page">
+    <!-- NOVEDADES -->
+    <section id="view-novedades" class="view" hidden>
+      <div class="split">
+        <div>
+          <div class="section-head">
+            <h1>Novedades</h1>
+            <div class="tools">
+              <label class="check"><input type="checkbox" id="only-urgent"> Solo urgentes</label>
+              <button class="btn" id="new-post" type="button" hidden>Nueva publicación</button>
+            </div>
+          </div>
+          <div id="posts" class="stack" aria-live="polite"></div>
+          <div id="posts-pager" class="pager"></div>
+        </div>
+        <aside class="side">
+          <h2>Próximos eventos</h2>
+          <ul id="side-events" class="events"></ul>
+          <a class="link" href="#calendario">Ver calendario completo</a>
+        </aside>
+      </div>
+    </section>
+
+    <!-- TIENDA -->
+    <section id="view-tienda" class="view" hidden>
+      <div class="split shop">
+        <div>
+          <div class="section-head"><h1>Tienda</h1></div>
+          <div class="filters">
+            <div class="field"><label for="f-q">Buscar</label><input id="f-q" type="search" maxlength="150"></div>
+            <div class="field"><label for="f-cat">Categoría</label><select id="f-cat"><option value="">Todas</option></select></div>
+            <div class="field"><label for="f-tipo">Tipo</label>
+              <select id="f-tipo"><option value="">Todo</option><option value="false">Productos</option><option value="true">Entradas a eventos</option></select>
+            </div>
+          </div>
+          <div id="products" class="grid" aria-live="polite"></div>
+          <div id="products-pager" class="pager"></div>
+        </div>
+        <aside class="side cart">
+          <h2>Tu carrito</h2>
+          <div id="cart"></div>
+        </aside>
+      </div>
+    </section>
+
+    <!-- CALENDARIO -->
+    <section id="view-calendario" class="view" hidden>
+      <div class="section-head"><h1>Calendario</h1></div>
+      <div id="calendar" class="stack"></div>
+    </section>
+
+    <!-- CUENTA -->
+    <section id="view-cuenta" class="view" hidden>
+      <div class="section-head"><h1>Mi cuenta</h1></div>
+      <div id="account"></div>
+    </section>
+
+    <!-- TRANSPARENCIA -->
+    <section id="view-transparencia" class="view" hidden>
+      <div class="section-head"><h1>Transparencia</h1></div>
+      <p class="empty">Los balances mensuales de la cooperadora van a estar acá apenas se publique el primero.</p>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+  <!-- Producto -->
+  <dialog id="product-dialog" class="dialog sheet" aria-labelledby="pd-title">
+    <h2 id="pd-title"></h2>
+    <p id="pd-desc" class="muted"></p>
+    <p id="pd-meta" class="muted"></p>
+    <div class="field"><label for="pd-variant">Opción</label><select id="pd-variant"></select></div>
+    <div class="field"><label for="pd-qty">Cantidad</label><input id="pd-qty" type="number" min="1" value="1"></div>
+    <p class="field-error" id="pd-error" role="alert"></p>
+    <div class="actions">
+      <button class="btn ghost" type="button" id="pd-cancel">Cancelar</button>
+      <button class="btn" type="button" id="pd-add">Agregar al carrito</button>
+    </div>
+  </dialog>
+
+  <!-- Nueva publicación -->
+  <dialog id="post-dialog" class="dialog sheet" aria-labelledby="post-dialog-title">
+    <form id="post-form" novalidate>
+      <h2 id="post-dialog-title">Nueva publicación</h2>
+      <div class="field"><label for="p-titulo">Título</label><input id="p-titulo" maxlength="200" required></div>
+      <div class="field"><label for="p-contenido">Contenido</label><textarea id="p-contenido" rows="6" maxlength="15000" required></textarea></div>
+      <label class="check"><input type="checkbox" id="p-urgente"> Marcar como urgente</label>
+      <p class="field-error" id="p-error" role="alert"></p>
+      <div class="actions">
+        <button class="btn ghost" type="button" id="p-cancel">Cancelar</button>
+        <button class="btn" type="submit" id="p-submit">Publicar</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="js/index.js"></script>
+</body>
+</html>
