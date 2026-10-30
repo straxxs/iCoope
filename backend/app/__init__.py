@@ -7,7 +7,7 @@ from flask_cors import CORS
 
 from config import Config
 
-from . import auth, catalog, community, db, errors, events, payments, users
+from . import auth, catalog, community,dashboard, db, errors, events, inventory, payments, tickets, users
 
 from pathlib import Path
 from flask import send_from_directory
@@ -61,6 +61,10 @@ def create_app(config_overrides=None):
     app.register_blueprint(community.bp)
     app.register_blueprint(payments.bp)
     app.register_blueprint(users.bp)
+    app.register_blueprint(inventory.bp)
+    app.register_blueprint(tickets.bp)
+    app.register_blueprint(dashboard.bp)
+    inventory.init_app(app)   # comando: flask expire-orders
 
     @app.get("/api/health")
     def health():

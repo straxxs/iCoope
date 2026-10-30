@@ -39,3 +39,5 @@ class Config:
     
     STOCK_RESERVATION_MINUTES = 15
     RESERVATION_MINUTES = 15
+    # Sal para los hashes de los tickets QR (solo demo local).
+    TICKET_SALT = "icoope-ticket-salt-demo-local-2026"    

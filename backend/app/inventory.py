@@ -2,90 +2,15 @@ import click
 from flask import Blueprint, jsonify, request
 
 from .auth import roles_required
-from .db import fetch_all, fetch_one, transaction
+from .db import fetch_all, fetch_one
 from .errors import APIError
-from .payments import restore_stock
+from .payments import release_expired_orders
 from .utils import integer
 
 
 bp = Blueprint("inventory", __name__, url_prefix="/api/inventory")
 
 MANAGERS = ("ADMIN", "COOPERADORA", "STAFF")
-
-
-def release_expired_orders(limit=50):
-    """Cancela los pedidos PENDING cuya reserva de stock venció y
-    devuelve el stock. Devuelve la lista de ids liberados.
-
-    No toca pedidos con una transferencia pendiente de verificación,
-    porque la familia ya reportó el pago y no debe perder la reserva
-    mientras la cooperadora lo revisa.
-    """
-    expired = fetch_all(
-        """
-        SELECT p.id_pedido
-        FROM pedido p
-        WHERE p.estado = 'PENDING'
-          AND p.fecha_vencimiento_reserva IS NOT NULL
-          AND p.fecha_vencimiento_reserva < NOW()
-        ORDER BY p.id_pedido
-        LIMIT %s
-        """,
-        (limit,),
-    )
-
-    released = []
-
-    for row in expired:
-        order_id = row["id_pedido"]
-
-        with transaction() as cursor:
-            # Se revalida todo después de bloquear el pedido, porque
-            # mientras tanto pudo pagarse o cancelarse.
-            cursor.execute(
-                """
-                SELECT id_pedido FROM pedido
-                WHERE id_pedido = %s
-                  AND estado = 'PENDING'
-                  AND fecha_vencimiento_reserva < NOW()
-                FOR UPDATE
-                """,
-                (order_id,),
-            )
-
-            if cursor.fetchone() is None:
-                continue
-
-            cursor.execute(
-                """
-                SELECT 1 FROM pago
-                WHERE id_pedido = %s
-                  AND metodo = 'TRANSFERENCIA'
-                  AND estado = 'PENDING'
-                LIMIT 1
-                """,
-                (order_id,),
-            )
-
-            if cursor.fetchone() is not None:
-                continue
-
-            restore_stock(cursor, order_id)
-
-            cursor.execute(
-                "UPDATE pedido SET estado = 'CANCELLED' "
-                "WHERE id_pedido = %s",
-                (order_id,),
-            )
-            cursor.execute(
-                "UPDATE pago SET estado = 'CANCELLED' "
-                "WHERE id_pedido = %s AND estado = 'PENDING'",
-                (order_id,),
-            )
-
-        released.append(order_id)
-
-    return released
 
 
 @bp.get("/low-stock")
@@ -146,4 +71,4 @@ def init_app(app):
     @app.cli.command("expire-orders")
     def expire_orders_command():
         released = release_expired_orders(limit=500)
-        click.echo(f"Pedidos liberados: {len(released)}")
+        click.echo(f"Pedidos liberados: {released}")

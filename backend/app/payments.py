@@ -8,6 +8,7 @@ from .auth import is_admin, jwt_required, roles_required
 from .db import fetch_all, fetch_one, transaction, get_db
 from .errors import APIError
 from .utils import body, integer, pagination, require_row
+from .tickets import generate_tickets
 
 
 bp = Blueprint("payments", __name__, url_prefix="/api")
@@ -500,6 +501,8 @@ def process_payment_result(payment_id, result, check_owner=False):
             "UPDATE pedido SET estado = %s WHERE id_pedido = %s",
             (result, order["id_pedido"]),
         )
+        if result == "APPROVED":
+            generate_tickets(cursor, order)        
 
     return {
         "id_pago": payment_id,

@@ -7,6 +7,7 @@ const LOGIN_URL = "login.html";
 const PUBLISHERS = ["ADMIN", "COOPERADORA", "DOCENTE", "STAFF"];
 const MODERATORS = ["ADMIN", "COOPERADORA"];
 const MANAGERS = ["ADMIN", "COOPERADORA", "STAFF"];
+const FINANCE = ["ADMIN", "COOPERADORA"];
 
 const ESTADOS = {
   PENDING: "Pendiente de pago",
@@ -108,7 +109,9 @@ function renderAuth() {
       h("a", { href: "register.html" }, "Registrate"),
     );
   }
-
+  document.querySelectorAll("[data-roles]").forEach((link) => {
+    link.hidden = !hasRole(link.dataset.roles.split(" "));
+  });
   $("#new-post").hidden = !hasRole(PUBLISHERS);
 }
 
@@ -119,9 +122,12 @@ const VIEWS = {
   calendario: loadCalendario,
   cuenta: loadCuenta,
   transparencia: () => {},
+  escaner: loadEscaner,
+  panel: loadPanel,  
 };
 
 function route() {
+  stopScan();
   const name = location.hash.slice(1);
   const view = name in VIEWS ? name : "novedades";
 
@@ -626,7 +632,12 @@ function orderRow(order) {
       }),
     }, target === "READY" ? "Marcar como listo" : "Marcar como entregado"));
   }
-
+  if (["APPROVED", "READY", "DELIVERED"].includes(order.estado)) {
+    actions.append(h("button", {
+      class: "btn ghost small", type: "button",
+      onclick: () => run(() => showTickets(order)),
+    }, "Ver entradas"));
+  }
   return row;
 }
 
@@ -645,6 +656,332 @@ async function payOrder(order, result) {
 
   await api(`/payments/${paymentId}/simulate`, { method: "POST", body: { estado: result } });
   toast(result === "APPROVED" ? "Pago aprobado." : "Pago rechazado: devolvimos el stock.", result !== "APPROVED");
+}
+/* ---------- Entradas con QR (cliente) ---------- */
+const ticketsDialog = $("#tickets-dialog");
+$("#tk-close").addEventListener("click", () => ticketsDialog.close());
+
+async function showTickets(order) {
+  const { entradas } = await api(`/orders/${order.id_pedido}/tickets`);
+  if (!entradas.length) { toast("Este pedido no incluye entradas a eventos."); return; }
+  $("#tk-list").replaceChildren(...entradas.map(ticketCard));
+  ticketsDialog.showModal();
+}
+
+function ticketCard(t) {
+  let picture;
+  try {
+    const qr = qrcode(0, "M");
+    qr.addData(t.hash_qr);
+    qr.make();
+    picture = h("img", { class: "qr", alt: "Código QR de la entrada", src: qr.createDataURL(6, 2) });
+  } catch {
+    picture = h("p", { class: "muted" }, "No se pudo dibujar el QR. Mostrá el código de abajo.");
+  }
+  return h("article", { class: `ticket${t.utilizado ? " used" : ""}` },
+    h("strong", {}, `${t.producto} (${t.variante})`),
+    h("small", { class: "muted" }, `Entradas incluidas: ${t.cantidad}`),
+    picture,
+    h("code", {}, t.hash_qr),
+    t.utilizado
+      ? h("span", { class: "tag CANCELLED" }, `Usada el ${fdate(t.fecha_uso)}`)
+      : h("span", { class: "tag APPROVED" }, "Disponible"),
+  );
+}
+
+/* ---------- Escáner (staff) ---------- */
+let scanStream = null;
+let scanTimer = null;
+
+function stopScan() {
+  clearInterval(scanTimer);
+  scanTimer = null;
+  if (scanStream) { scanStream.getTracks().forEach((t) => t.stop()); scanStream = null; }
+}
+
+async function startScan(video, onCode) {
+  stopScan();
+  if (!navigator.mediaDevices?.getUserMedia) {
+    throw new Error("Este navegador no permite usar la cámara (hace falta HTTPS o localhost).");
+  }
+  try {
+    scanStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: "environment" } }, audio: false,
+    });
+  } catch {
+    throw new Error("No se pudo acceder a la cámara. Revisá los permisos o usá el ingreso manual.");
+  }
+  video.srcObject = scanStream;
+  await video.play();
+
+  const detector = "BarcodeDetector" in window ? new BarcodeDetector({ formats: ["qr_code"] }) : null;
+  const canvas = document.createElement("canvas");
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  let busy = false;
+
+  scanTimer = setInterval(async () => {
+    if (busy || video.readyState < 2) return;
+    busy = true;
+    try {
+      let value = null;
+      if (detector) {
+        const codes = await detector.detect(video);
+        value = codes.length ? codes[0].rawValue : null;
+      } else if (window.jsQR) {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        ctx.drawImage(video, 0, 0);
+        const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const found = window.jsQR(img.data, img.width, img.height);
+        value = found ? found.data : null;
+      }
+      if (value) await onCode(value.trim().toLowerCase());
+    } catch { /* un frame fallido no frena el escaneo */ }
+    finally { busy = false; }
+  }, 400);
+}
+
+async function loadEscaner() {
+  const box = $("#scanner");
+  box.replaceChildren();
+
+  if (!hasRole(MANAGERS)) {
+    box.append(h("p", { class: "empty" }, "Esta sección es solo para el staff de la cooperadora."));
+    return;
+  }
+
+  const video = h("video", { class: "scan-video", playsinline: true, muted: true });
+  video.muted = true;
+  const out = h("div", { class: "scan-result", role: "status", "aria-live": "assertive" },
+    "Activá la cámara y apuntá al código QR.");
+  const manual = h("input", { id: "manual-hash", maxlength: "64", autocomplete: "off", spellcheck: "false", placeholder: "Código de 64 caracteres" });
+  let last = { code: "", at: 0 };
+
+  const check = async (code) => {
+    const now = Date.now();
+    if (code === last.code && now - last.at < 4000) return; // evita repetir el mismo escaneo
+    last = { code, at: now };
+    try {
+      const { ticket } = await api("/v1/tickets/validar", { method: "POST", body: { hash: code } });
+      out.className = "scan-result ok";
+      out.textContent = `✓ Válido: ${ticket.producto} (${ticket.variante}) · ${ticket.cantidad} entrada(s) · ${ticket.titular}`;
+      if (navigator.vibrate) navigator.vibrate(150);
+    } catch (err) {
+      out.className = "scan-result fail";
+      out.textContent = `✕ ${err.message}`;
+      if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
+    }
+  };
+
+  box.append(
+    video,
+    h("div", { class: "actions", style: "justify-content:flex-start" },
+      h("button", { class: "btn", type: "button", onclick: () => run(() => startScan(video, check)) }, "Activar cámara"),
+      h("button", { class: "btn ghost", type: "button", onclick: stopScan }, "Detener"),
+    ),
+    out,
+    h("form", {
+      class: "inline", style: "margin-top:1rem",
+      onsubmit: (event) => {
+        event.preventDefault();
+        const code = manual.value.trim().toLowerCase();
+        if (code) { last = { code: "", at: 0 }; check(code); }
+      },
+    },
+      h("label", { for: "manual-hash" }, "Ingreso manual:"),
+      manual,
+      h("button", { class: "btn ghost small", type: "submit" }, "Validar"),
+    ),
+  );
+}
+
+/* ---------- Panel de la cooperadora ---------- */
+const panel = { desde: "", hasta: "" };
+
+const nextDay = (value) => {
+  const d = new Date(`${value}T00:00:00`);
+  d.setDate(d.getDate() + 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+
+function table(headers, rows) {
+  return h("table", { class: "inv" },
+    h("thead", {}, h("tr", {}, headers.map((t) => h("th", {}, t)))),
+    h("tbody", {}, rows.map((r) => h("tr", {}, r.map((c) => h("td", {}, c))))),
+  );
+}
+
+const panelCard = (title, ...content) => h("section", { class: "card" }, h("h2", {}, title), ...content);
+const metric = (label, value) => h("div", { class: "metric" }, h("small", {}, label), h("strong", {}, value));
+
+async function exportCsv(params) {
+  const response = await fetch(`${API}/dashboard/export.csv?${params}`, {
+    headers: { Authorization: `Bearer ${token()}` },
+  });
+  if (!response.ok) throw new Error("No se pudo exportar el CSV.");
+  const url = URL.createObjectURL(await response.blob());
+  const link = h("a", { href: url, download: "recaudacion.csv" });
+  document.body.append(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+async function loadPanel() {
+  const box = $("#panel");
+  box.replaceChildren();
+
+  if (!hasRole(FINANCE)) {
+    box.append(h("p", { class: "empty" }, "Esta sección es solo para la cooperadora."));
+    return;
+  }
+
+  const params = new URLSearchParams();
+  if (panel.desde) params.set("desde", panel.desde);
+  if (panel.hasta) params.set("hasta", nextDay(panel.hasta));
+
+  const [d, { categorias }, { inventario }] = await Promise.all([
+    api(`/dashboard/summary?${params}`),
+    api("/categories"),
+    api("/inventory?per_page=100"),
+  ]);
+
+  const desde = h("input", { id: "pn-desde", type: "date", value: panel.desde });
+  const hasta = h("input", { id: "pn-hasta", type: "date", value: panel.hasta });
+
+  box.append(
+    h("div", { class: "filters-row" },
+      h("div", { class: "field" }, h("label", { for: "pn-desde" }, "Desde"), desde),
+      h("div", { class: "field" }, h("label", { for: "pn-hasta" }, "Hasta"), hasta),
+      h("button", { class: "btn", type: "button", onclick: () => { panel.desde = desde.value; panel.hasta = hasta.value; run(loadPanel); } }, "Actualizar"),
+      h("button", { class: "btn ghost", type: "button", onclick: () => run(() => exportCsv(params)) }, "Exportar CSV"),
+    ),
+    h("p", { class: "muted" }, "Los pagos son simulados: estas cifras son de demostración."),
+    h("div", { class: "metrics" },
+      metric("Recaudación", money(d.recaudacion)),
+      metric("Pagos aprobados", String(d.pagos_aprobados)),
+      metric("Entradas emitidas", String(d.entradas.emitidas)),
+      metric("Entradas usadas", String(d.entradas.usadas)),
+    ),
+    panelCard("Recaudación por día", d.por_dia.length
+      ? table(["Día", "Pagos", "Total"], d.por_dia.map((r) => [r.dia, String(r.pagos), money(r.total)]))
+      : h("p", { class: "muted" }, "Sin pagos aprobados en el período.")),
+    panelCard("Por categoría", d.por_categoria.length
+      ? table(["Categoría", "Unidades", "Total"], d.por_categoria.map((r) => [r.categoria, String(r.unidades), money(r.total)]))
+      : h("p", { class: "muted" }, "Sin datos.")),
+    panelCard("Productos más vendidos", d.top_productos.length
+      ? table(["Producto", "Unidades", "Total"], d.top_productos.map((r) => [r.producto, String(r.unidades), money(r.total)]))
+      : h("p", { class: "muted" }, "Sin datos.")),
+    panelCard("Pedidos por estado", d.pedidos_por_estado.length
+      ? table(["Estado", "Cantidad"], d.pedidos_por_estado.map((r) => [ESTADOS[r.estado] || r.estado, String(r.total)]))
+      : h("p", { class: "muted" }, "Sin pedidos.")),
+    catalogCard(categorias),
+    stockCard(inventario),
+  );
+}
+
+function catalogCard(categorias) {
+  const f = {
+    nombre: h("input", { id: "np-nombre", maxlength: "150" }),
+    categoria: h("select", { id: "np-cat" }, categorias.map((c) => h("option", { value: c.id_categoria }, c.nombre))),
+    precio: h("input", { id: "np-precio", type: "number", min: "0", step: "0.01" }),
+    descripcion: h("textarea", { id: "np-desc", rows: "3", maxlength: "20000" }),
+    evento: h("input", { id: "np-evento", type: "checkbox" }),
+    fecha: h("input", { id: "np-fecha", type: "datetime-local" }),
+    variante: h("input", { id: "np-var", maxlength: "100", value: "Único" }),
+    stock: h("input", { id: "np-stock", type: "number", min: "0", step: "1", value: "0" }),
+  };
+  const error = h("p", { class: "field-error", role: "alert" });
+  const dateField = h("div", { class: "field", hidden: true }, h("label", { for: "np-fecha" }, "Fecha del evento"), f.fecha);
+  f.evento.addEventListener("change", () => { dateField.hidden = !f.evento.checked; });
+
+  const catName = h("input", { id: "nc-nombre", maxlength: "100", placeholder: "Nueva categoría" });
+
+  const submit = (event) => {
+    event.preventDefault();
+    run(async () => {
+      error.textContent = "";
+      const body = {
+        id_categoria: Number(f.categoria.value),
+        nombre: f.nombre.value.trim(),
+        precio: f.precio.value,
+        es_evento: f.evento.checked,
+      };
+      if (f.descripcion.value.trim()) body.descripcion = f.descripcion.value.trim();
+      if (f.evento.checked) body.fecha_evento = f.fecha.value;
+
+      try {
+        const { producto } = await api("/products", { method: "POST", body });
+        await api(`/products/${producto.id_producto}/variants`, {
+          method: "POST",
+          body: { nombre: f.variante.value.trim(), stock: Number(f.stock.value) },
+        });
+        toast("Producto creado.");
+        await loadPanel();
+      } catch (err) {
+        error.textContent = err.message;
+      }
+    });
+  };
+
+  return panelCard("Nuevo producto o entrada",
+    h("div", { class: "inline", style: "margin-bottom:1rem" },
+      catName,
+      h("button", {
+        class: "btn ghost small", type: "button",
+        onclick: () => run(async () => {
+          await api("/categories", { method: "POST", body: { nombre: catName.value.trim() } });
+          toast("Categoría creada.");
+          await loadPanel();
+        }),
+      }, "Crear categoría"),
+    ),
+    categorias.length ? h("form", { novalidate: true, onsubmit: submit },
+      h("div", { class: "form-grid" },
+        h("div", { class: "field" }, h("label", { for: "np-nombre" }, "Nombre"), f.nombre),
+        h("div", { class: "field" }, h("label", { for: "np-cat" }, "Categoría"), f.categoria),
+        h("div", { class: "field" }, h("label", { for: "np-precio" }, "Precio (ARS)"), f.precio),
+        h("div", { class: "field" }, h("label", { for: "np-var" }, "Opción inicial (talle, modelo...)"), f.variante),
+        h("div", { class: "field" }, h("label", { for: "np-stock" }, "Stock (o aforo si es evento)"), f.stock),
+      ),
+      h("div", { class: "field" }, h("label", { for: "np-desc" }, "Descripción (opcional)"), f.descripcion),
+      h("label", { class: "check", for: "np-evento" }, f.evento, " Es una entrada a un evento"),
+      dateField,
+      error,
+      h("div", { class: "actions" }, h("button", { class: "btn", type: "submit" }, "Crear")),
+    ) : h("p", { class: "muted" }, "Creá primero una categoría para poder cargar productos."),
+  );
+}
+
+function stockCard(inventario) {
+  const rows = inventario.map((row) => {
+    const delta = h("input", {
+      type: "number", step: "1", value: "0",
+      "aria-label": `Ajuste de stock de ${row.producto} ${row.variante}`,
+    });
+    const apply = h("button", {
+      class: "btn small", type: "button",
+      onclick: () => run(async () => {
+        const n = Number(delta.value);
+        if (!Number.isInteger(n) || n === 0) { toast("Ingresá un ajuste distinto de cero.", true); return; }
+        await api(`/variants/${row.id_variante}/stock`, { method: "PATCH", body: { delta: n } });
+        toast("Stock actualizado.");
+        await loadPanel();
+      }),
+    }, "Aplicar");
+
+    return [
+      row.producto + (row.es_evento ? " (evento)" : ""),
+      row.variante,
+      String(row.stock),
+      h("div", { class: "inline" }, delta, apply),
+    ];
+  });
+
+  return panelCard("Inventario",
+    rows.length
+      ? table(["Producto", "Opción", "Stock", "Ajustar (+/-)"], rows)
+      : h("p", { class: "muted" }, "Todavía no hay productos con opciones cargadas."));
 }
 
 /* ---------- Inicio ---------- */

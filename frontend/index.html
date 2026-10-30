@@ -19,6 +19,8 @@
       <a href="#calendario" data-view="calendario">Calendario</a>
       <a href="#cuenta" data-view="cuenta">Mi cuenta</a>
       <a href="#transparencia" data-view="transparencia">Transparencia</a>
+      <a href="#escaner" data-view="escaner" data-roles="ADMIN COOPERADORA STAFF" hidden>Escáner</a>
+      <a href="#panel" data-view="panel" data-roles="ADMIN COOPERADORA" hidden>Panel</a>
     </nav>
     <div class="auth" id="auth"></div>
   </header>
@@ -85,6 +87,16 @@
       <div class="section-head"><h1>Transparencia</h1></div>
       <p class="empty">Los balances mensuales de la cooperadora van a estar acá apenas se publique el primero.</p>
     </section>
+
+    <section id="view-escaner" class="view" hidden>
+      <div class="section-head"><h1>Validar entradas</h1></div>
+      <div id="scanner"></div>
+    </section>
+
+    <section id="view-panel" class="view" hidden>
+      <div class="section-head"><h1>Panel de la cooperadora</h1></div>
+      <div id="panel"></div>
+    </section>
   </main>
 
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
@@ -118,6 +130,14 @@
     </form>
   </dialog>
 
+  <dialog id="tickets-dialog" class="dialog sheet" aria-labelledby="tk-title">
+    <h2 id="tk-title">Tus entradas</h2>
+    <div id="tk-list" class="stack"></div>
+    <div class="actions"><button class="btn" type="button" id="tk-close">Cerrar</button></div>
+  </dialog>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js"></script>
   <script src="js/index.js"></script>
 </body>
 </html>
