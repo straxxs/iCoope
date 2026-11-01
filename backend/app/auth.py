@@ -13,12 +13,15 @@ from werkzeug.security import (
 
 from .db import fetch_all, fetch_one, transaction
 from .errors import APIError
+from .extensions import limiter
 from .utils import body, text
 
 
 bp = Blueprint("auth", __name__, url_prefix="/api/auth")
 
 DUMMY_HASH = generate_password_hash("clave-interna-de-comprobacion")
+
+PUBLIC_ROLES = {"ALUMNO", "PADRE"}
 
 
 def get_user(user_id):
@@ -199,21 +202,27 @@ def is_admin():
 
 
 @bp.post("/register")
+@limiter.limit("10 per hour")
 def register():
     if not current_app.config["PUBLIC_REGISTRATION_ENABLED"]:
         raise APIError("El registro público está deshabilitado.", 403)
 
-    role = current_app.config["PUBLIC_REGISTRATION_ROLE"]
+    data = body({
+        "nombre", "apellido", "email", "password", "telefono", "rol",
+    })
 
-    if role not in {"ALUMNO", "PADRE"}:
-        raise APIError("Rol público mal configurado.", 500)
+    role = data.pop("rol", None) or current_app.config[
+        "PUBLIC_REGISTRATION_ROLE"
+    ]
 
-    data = body({"nombre", "apellido", "email", "password", "telefono"})
+    if not isinstance(role, str) or role not in PUBLIC_ROLES:
+        raise APIError("Rol no permitido en el registro público.")
 
     return jsonify(usuario=create_user(data, role)), 201
 
 
 @bp.post("/login")
+@limiter.limit("5 per minute")
 def login():
     data = body({"email", "password"})
     email = normalize_email(data.get("email"))

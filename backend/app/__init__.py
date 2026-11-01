@@ -1,16 +1,29 @@
 from datetime import date, datetime
 from decimal import Decimal
+from pathlib import Path
 
-from flask import Flask, jsonify
+from flask import Flask, jsonify, send_from_directory
 from flask.json.provider import DefaultJSONProvider
 from flask_cors import CORS
 
 from config import Config
 
-from . import auth, catalog, community,dashboard, db, errors, events, inventory, payments, tickets, users
+from . import (
+    auth,
+    catalog,
+    community,
+    dashboard,
+    db,
+    errors,
+    events,
+    inventory,
+    payments,
+    tickets,
+    transparency,
+    users,
+)
+from .extensions import limiter
 
-from pathlib import Path
-from flask import send_from_directory
 
 class APIJSONProvider(DefaultJSONProvider):
     @staticmethod
@@ -54,6 +67,7 @@ def create_app(config_overrides=None):
     db.init_app(app)
     errors.init_app(app)
     auth.init_app(app)
+    limiter.init_app(app)
 
     app.register_blueprint(auth.bp)
     app.register_blueprint(catalog.bp)
@@ -64,6 +78,7 @@ def create_app(config_overrides=None):
     app.register_blueprint(inventory.bp)
     app.register_blueprint(tickets.bp)
     app.register_blueprint(dashboard.bp)
+    app.register_blueprint(transparency.bp)
     inventory.init_app(app)   # comando: flask expire-orders
 
     @app.get("/api/health")
@@ -74,14 +89,14 @@ def create_app(config_overrides=None):
             pagos="simulados",
         )
 
-    FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend"
+    frontend_dir = Path(__file__).resolve().parents[2] / "frontend"
 
     @app.get("/")
     def index():
-        return send_from_directory(FRONTEND_DIR, "login.html")
+        return send_from_directory(frontend_dir, "login.html")
 
     @app.get("/<path:filename>")
     def frontend_files(filename):
-        return send_from_directory(FRONTEND_DIR, filename)
+        return send_from_directory(frontend_dir, filename)
 
     return app

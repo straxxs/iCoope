@@ -8,6 +8,7 @@ const submitBtn = document.getElementById("submit");
 const fields = {
   nombre: document.getElementById("nombre"),
   apellido: document.getElementById("apellido"),
+  rol: document.getElementById("rol"),
   email: document.getElementById("email"),
   telefono: document.getElementById("telefono"),
   password: document.getElementById("password"),
@@ -42,6 +43,10 @@ function validate() {
 
   if (!nombre) fail("nombre", "Ingresá tu nombre.");
   if (!apellido) fail("apellido", "Ingresá tu apellido.");
+
+  if (!["ALUMNO", "PADRE"].includes(fields.rol.value)) {
+    fail("rol", "Elegí una opción.");
+  }
 
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     fail("email", "Ingresá un email válido.");
@@ -91,6 +96,7 @@ form.addEventListener("submit", async (event) => {
     apellido: fields.apellido.value.trim(),
     email: fields.email.value.trim(),
     password: fields.password.value,
+    rol: fields.rol.value,
   };
   const telefono = fields.telefono.value.trim();
   if (telefono) payload.telefono = telefono;
@@ -110,6 +116,8 @@ form.addEventListener("submit", async (event) => {
         showDialog(false, "Registro fallido", "Ese email ya está registrado. Probá ingresando.");
       } else if (response.status === 403) {
         showDialog(false, "Registro fallido", "El registro está deshabilitado por ahora.");
+      } else if (response.status === 429) {
+        showDialog(false, "Demasiados intentos", "Esperá un rato y probá de nuevo.");
       } else if (response.status >= 500) {
         showDialog(false, "Registro fallido", "Hubo un problema en el servidor. Probá de nuevo más tarde.");
       } else {

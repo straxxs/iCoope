@@ -35,6 +35,15 @@
         </div>
 
         <div class="field">
+          <label for="rol">Soy</label>
+          <select id="rol">
+            <option value="ALUMNO">Alumno/a</option>
+            <option value="PADRE">Padre, madre o tutor</option>
+          </select>
+          <p class="field-error" id="rol-error" role="alert"></p>
+        </div>
+
+        <div class="field">
           <label for="email">Email</label>
           <input id="email" type="email" autocomplete="email" maxlength="150" required>
           <p class="field-error" id="email-error" role="alert"></p>

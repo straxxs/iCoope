@@ -39,7 +39,7 @@ def post_values(data):
 @bp.get("/v1/foro")
 def posts():
     page, limit, offset = pagination()
-    condition = "publicado = TRUE"
+    condition = "p.publicado = TRUE"
 
     urgent = request.args.get("urgente")
 
@@ -47,17 +47,18 @@ def posts():
         if urgent not in {"true", "false"}:
             raise APIError("urgente debe ser true o false.")
 
-        condition += " AND urgente = " + (
+        condition += " AND p.urgente = " + (
             "TRUE" if urgent == "true" else "FALSE"
         )
 
     return jsonify(
         publicaciones=fetch_all(
             f"""
-            SELECT *
-            FROM publicacion
+            SELECT p.*, CONCAT(u.nombre, ' ', u.apellido) AS autor
+            FROM publicacion p
+            JOIN usuario u ON u.id_usuario = p.id_autor
             WHERE {condition}
-            ORDER BY urgente DESC, fecha_publicacion DESC
+            ORDER BY p.urgente DESC, p.fecha_publicacion DESC
             LIMIT %s OFFSET %s
             """,
             (limit, offset),
@@ -65,7 +66,7 @@ def posts():
         page=page,
         per_page=limit,
         total=fetch_one(
-            f"SELECT COUNT(*) AS total FROM publicacion "
+            f"SELECT COUNT(*) AS total FROM publicacion p "
             f"WHERE {condition}"
         )["total"],
     )

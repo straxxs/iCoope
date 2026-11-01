@@ -8,6 +8,7 @@ const PUBLISHERS = ["ADMIN", "COOPERADORA", "DOCENTE", "STAFF"];
 const MODERATORS = ["ADMIN", "COOPERADORA"];
 const MANAGERS = ["ADMIN", "COOPERADORA", "STAFF"];
 const FINANCE = ["ADMIN", "COOPERADORA"];
+const ALL_ROLES = ["PADRE", "ALUMNO", "DOCENTE", "COOPERADORA", "STAFF", "ADMIN"];
 
 const ESTADOS = {
   PENDING: "Pendiente de pago",
@@ -59,6 +60,7 @@ const hasRole = (roles) => !!user && roles.some((role) => user.roles.includes(ro
 function logout() {
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(USER_KEY);
+  localStorage.removeItem(CART_KEY); // el carrito no debe pasar de una cuenta a otra
   user = null;
   window.location.href = LOGIN_URL;
 }
@@ -85,7 +87,11 @@ async function api(path, { method = "GET", body } = {}) {
     logout();
     throw new Error("Tu sesión expiró. Ingresá de nuevo.");
   }
-  if (!response.ok) throw new Error(data.error || "Ocurrió un error inesperado.");
+  if (!response.ok) {
+    const error = new Error(data.error || "Ocurrió un error inesperado.");
+    error.data = data; // permite mostrar datos extra (por ejemplo, el próximo horario libre)
+    throw error;
+  }
   return data;
 }
 
@@ -121,9 +127,10 @@ const VIEWS = {
   tienda: loadTienda,
   calendario: loadCalendario,
   cuenta: loadCuenta,
-  transparencia: () => {},
+  transparencia: loadTransparencia,
   escaner: loadEscaner,
-  panel: loadPanel,  
+  panel: loadPanel,
+  usuarios: loadUsuarios,
 };
 
 function route() {
@@ -184,6 +191,7 @@ function postCard(post) {
     post.urgente ? h("span", { class: "tag urgent" }, "Urgente") : null,
     h("h2", {}, post.titulo),
     h("time", { datetime: post.fecha_publicacion }, fdate(post.fecha_publicacion)),
+    post.autor ? h("small", { class: "muted" }, ` · ${post.autor}`) : null,
     h("p", {}, post.contenido),
   );
 
@@ -205,8 +213,12 @@ function postCard(post) {
 
 let eventsCache = null;
 
+// Trae los eventos de los últimos 30 días en adelante, para que los viejos no tapen a los nuevos.
 async function getEvents() {
-  if (!eventsCache) eventsCache = (await api("/events?per_page=100")).eventos;
+  if (!eventsCache) {
+    const since = new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 19);
+    eventsCache = (await api(`/events?per_page=100&desde=${since}`)).eventos;
+  }
   return eventsCache;
 }
 
@@ -478,6 +490,8 @@ async function loadCalendario() {
   const box = $("#calendar");
   box.replaceChildren();
 
+  if (hasRole(PUBLISHERS)) box.append(await eventForm());
+
   if (!events.length) {
     box.append(h("p", { class: "empty" }, "No hay actividades cargadas todavía."));
     return;
@@ -503,9 +517,73 @@ async function loadCalendario() {
         h("span", { class: "tag" }, e.tipo),
         h("p", { class: "muted" }, `${fdate(e.fecha_inicio)} a ${new Date(e.fecha_fin).toLocaleTimeString("es-AR", { timeStyle: "short" })} - ${e.espacio}`),
         e.descripcion ? h("p", {}, e.descripcion) : null,
+        hasRole(MODERATORS) ? h("button", {
+          class: "btn danger small", type: "button",
+          onclick: () => run(async () => {
+            if (!confirm("¿Eliminar este evento?")) return;
+            await api(`/events/${e.id_evento}`, { method: "DELETE" });
+            toast("Evento eliminado.");
+            await loadCalendario();
+          }),
+        }, "Eliminar") : null,
       ),
     ));
   }
+}
+
+async function eventForm() {
+  const { espacios } = await api("/spaces");
+  const f = {
+    titulo: h("input", { id: "ev-titulo", maxlength: "200" }),
+    tipo: h("input", { id: "ev-tipo", maxlength: "50", value: "Reunión" }),
+    espacio: h("select", { id: "ev-espacio" }, espacios.map((s) => h("option", { value: s.id_espacio }, s.nombre))),
+    inicio: h("input", { id: "ev-inicio", type: "datetime-local" }),
+    fin: h("input", { id: "ev-fin", type: "datetime-local" }),
+    desc: h("textarea", { id: "ev-desc", rows: "2", maxlength: "20000" }),
+  };
+  const error = h("p", { class: "field-error", role: "alert" });
+
+  const submit = (event) => {
+    event.preventDefault();
+    run(async () => {
+      error.textContent = "";
+      const body = {
+        id_espacio: Number(f.espacio.value),
+        titulo: f.titulo.value.trim(),
+        tipo: f.tipo.value.trim(),
+        fecha_inicio: f.inicio.value,
+        fecha_fin: f.fin.value,
+      };
+      if (f.desc.value.trim()) body.descripcion = f.desc.value.trim();
+
+      try {
+        await api("/events", { method: "POST", body });
+        toast("Evento creado.");
+        await loadCalendario();
+      } catch (err) {
+        const next = err.data && err.data.proximo_horario_libre;
+        error.textContent = next
+          ? `${err.message} Próximo horario libre: ${fdate(next.fecha_inicio)}.`
+          : err.message;
+      }
+    });
+  };
+
+  return h("section", { class: "card" }, h("h2", {}, "Nuevo evento"),
+    espacios.length
+      ? h("form", { novalidate: true, onsubmit: submit },
+        h("div", { class: "form-grid" },
+          h("div", { class: "field" }, h("label", { for: "ev-titulo" }, "Título"), f.titulo),
+          h("div", { class: "field" }, h("label", { for: "ev-tipo" }, "Tipo"), f.tipo),
+          h("div", { class: "field" }, h("label", { for: "ev-espacio" }, "Espacio"), f.espacio),
+          h("div", { class: "field" }, h("label", { for: "ev-inicio" }, "Inicio"), f.inicio),
+          h("div", { class: "field" }, h("label", { for: "ev-fin" }, "Fin"), f.fin),
+        ),
+        h("div", { class: "field" }, h("label", { for: "ev-desc" }, "Descripción (opcional)"), f.desc),
+        error,
+        h("div", { class: "actions" }, h("button", { class: "btn", type: "submit" }, "Crear")),
+      )
+      : h("p", { class: "muted" }, "Primero hay que cargar un espacio (seed.sql incluye algunos)."));
 }
 
 /* ---------- Mi cuenta ---------- */
@@ -533,6 +611,8 @@ async function loadCuenta() {
     h("p", {}, "Roles: ", ...user.roles.map((r) => h("span", { class: "tag" }, r)), " "),
   ));
 
+  box.append(passwordCard());
+
   if (hasRole(MANAGERS)) await renderInventoryAlerts(box);
 
   const ordersCard = h("section", { class: "card" }, h("h2", {}, hasRole(MANAGERS) && account.all ? "Todos los pedidos" : "Mis pedidos"));
@@ -554,6 +634,37 @@ async function loadCuenta() {
   for (const order of pedidos) ordersCard.append(orderRow(order));
 
   box.append(ordersCard);
+}
+
+function passwordCard() {
+  const actual = h("input", { id: "pw-actual", type: "password", autocomplete: "current-password", maxlength: "128" });
+  const nueva = h("input", { id: "pw-nueva", type: "password", autocomplete: "new-password", maxlength: "128" });
+  const error = h("p", { class: "field-error", role: "alert" });
+
+  const submit = (event) => {
+    event.preventDefault();
+    run(async () => {
+      error.textContent = "";
+      try {
+        await api("/auth/change-password", {
+          method: "POST",
+          body: { password_actual: actual.value, password_nueva: nueva.value },
+        });
+        actual.value = "";
+        nueva.value = "";
+        toast("Contraseña actualizada.");
+      } catch (err) {
+        error.textContent = err.message;
+      }
+    });
+  };
+
+  return h("section", { class: "card" }, h("h2", {}, "Cambiar contraseña"),
+    h("form", { novalidate: true, onsubmit: submit },
+      h("div", { class: "field" }, h("label", { for: "pw-actual" }, "Contraseña actual"), actual),
+      h("div", { class: "field" }, h("label", { for: "pw-nueva" }, "Contraseña nueva (mínimo 8)"), nueva),
+      error,
+      h("button", { class: "btn", type: "submit" }, "Cambiar")));
 }
 
 async function renderInventoryAlerts(box) {
@@ -657,6 +768,7 @@ async function payOrder(order, result) {
   await api(`/payments/${paymentId}/simulate`, { method: "POST", body: { estado: result } });
   toast(result === "APPROVED" ? "Pago aprobado." : "Pago rechazado: devolvimos el stock.", result !== "APPROVED");
 }
+
 /* ---------- Entradas con QR (cliente) ---------- */
 const ticketsDialog = $("#tickets-dialog");
 $("#tk-close").addEventListener("click", () => ticketsDialog.close());
@@ -840,10 +952,11 @@ async function loadPanel() {
   if (panel.desde) params.set("desde", panel.desde);
   if (panel.hasta) params.set("hasta", nextDay(panel.hasta));
 
-  const [d, { categorias }, { inventario }] = await Promise.all([
+  const [d, { categorias }, { inventario }, products] = await Promise.all([
     api(`/dashboard/summary?${params}`),
     api("/categories"),
     api("/inventory?per_page=100"),
+    api("/admin/products?per_page=100"),
   ]);
 
   const desde = h("input", { id: "pn-desde", type: "date", value: panel.desde });
@@ -876,6 +989,7 @@ async function loadPanel() {
       ? table(["Estado", "Cantidad"], d.pedidos_por_estado.map((r) => [ESTADOS[r.estado] || r.estado, String(r.total)]))
       : h("p", { class: "muted" }, "Sin pedidos.")),
     catalogCard(categorias),
+    productsCard(products.productos),
     stockCard(inventario),
   );
 }
@@ -953,6 +1067,39 @@ function catalogCard(categorias) {
   );
 }
 
+function productsCard(productos) {
+  const rows = productos.map((p) => {
+    const price = h("input", {
+      type: "number", min: "0", step: "0.01", value: String(p.precio),
+      "aria-label": `Precio de ${p.nombre}`,
+    });
+
+    const patch = (body, message) => run(async () => {
+      await api(`/products/${p.id_producto}`, { method: "PATCH", body });
+      toast(message);
+      await loadPanel();
+    });
+
+    return [
+      p.nombre + (p.es_evento ? " (evento)" : ""),
+      h("div", { class: "inline" }, price,
+        h("button", {
+          class: "btn small", type: "button",
+          onclick: () => patch({ precio: price.value }, "Precio actualizado."),
+        }, "Guardar")),
+      h("span", { class: p.activo ? "tag APPROVED" : "tag CANCELLED" }, p.activo ? "Activo" : "Inactivo"),
+      h("button", {
+        class: "btn ghost small", type: "button",
+        onclick: () => patch({ activo: !p.activo }, p.activo ? "Producto desactivado." : "Producto activado."),
+      }, p.activo ? "Desactivar" : "Activar"),
+    ];
+  });
+
+  return panelCard("Productos", rows.length
+    ? table(["Producto", "Precio (ARS)", "Estado", ""], rows)
+    : h("p", { class: "muted" }, "Todavía no hay productos."));
+}
+
 function stockCard(inventario) {
   const rows = inventario.map((row) => {
     const delta = h("input", {
@@ -982,6 +1129,146 @@ function stockCard(inventario) {
     rows.length
       ? table(["Producto", "Opción", "Stock", "Ajustar (+/-)"], rows)
       : h("p", { class: "muted" }, "Todavía no hay productos con opciones cargadas."));
+}
+
+/* ---------- Usuarios (solo ADMIN) ---------- */
+const usersState = { q: "", page: 1 };
+
+async function loadUsuarios() {
+  const box = $("#users");
+  box.replaceChildren();
+
+  if (!hasRole(["ADMIN"])) {
+    box.append(h("p", { class: "empty" }, "Esta sección es solo para administradores."));
+    return;
+  }
+
+  const params = new URLSearchParams({ page: usersState.page, per_page: 20 });
+  if (usersState.q) params.set("q", usersState.q);
+  const data = await api(`/users?${params}`);
+
+  const search = h("input", { type: "search", value: usersState.q, placeholder: "Buscar por nombre o email", "aria-label": "Buscar usuarios" });
+  box.append(h("form", {
+    class: "inline", style: "margin-bottom:1rem",
+    onsubmit: (event) => {
+      event.preventDefault();
+      usersState.q = search.value.trim();
+      usersState.page = 1;
+      run(loadUsuarios);
+    },
+  }, search, h("button", { class: "btn ghost small", type: "submit" }, "Buscar")));
+
+  box.append(h("section", { class: "card" },
+    data.usuarios.length
+      ? table(["Nombre", "Email", "Roles", ""], data.usuarios.map(userRow))
+      : h("p", { class: "muted" }, "No se encontraron usuarios.")));
+
+  const pages = Math.max(1, Math.ceil(data.total / data.per_page));
+  if (pages > 1) {
+    box.append(h("div", { class: "pager" },
+      h("button", {
+        class: "btn ghost small", type: "button", disabled: data.page <= 1,
+        onclick: () => { usersState.page -= 1; run(loadUsuarios); },
+      }, "Anterior"),
+      h("span", {}, `Página ${data.page} de ${pages}`),
+      h("button", {
+        class: "btn ghost small", type: "button", disabled: data.page >= pages,
+        onclick: () => { usersState.page += 1; run(loadUsuarios); },
+      }, "Siguiente")));
+  }
+}
+
+function userRow(u) {
+  const checks = ALL_ROLES.map((role) => ({
+    role,
+    input: h("input", { type: "checkbox", checked: u.roles.includes(role) }),
+  }));
+
+  const save = h("button", {
+    class: "btn small", type: "button",
+    onclick: () => run(async () => {
+      const roles = checks.filter((c) => c.input.checked).map((c) => c.role);
+      if (!roles.length) { toast("Elegí al menos un rol.", true); return; }
+      await api(`/auth/users/${u.id_usuario}/roles`, { method: "PUT", body: { roles } });
+      toast("Roles actualizados.");
+    }),
+  }, "Guardar");
+
+  const toggle = h("button", {
+    class: "btn ghost small", type: "button",
+    onclick: () => run(async () => {
+      await api(`/users/${u.id_usuario}/active`, { method: "PATCH", body: { activo: !u.activo } });
+      toast(u.activo ? "Usuario desactivado." : "Usuario activado.");
+      await loadUsuarios();
+    }),
+  }, u.activo ? "Desactivar" : "Activar");
+
+  return [
+    `${u.nombre} ${u.apellido}`,
+    u.email,
+    h("div", { class: "inline" },
+      checks.map((c) => h("label", { class: "check" }, c.input, ` ${c.role}`)),
+      save),
+    toggle,
+  ];
+}
+
+/* ---------- Transparencia ---------- */
+async function loadTransparencia() {
+  const box = $("#transparency");
+  box.replaceChildren();
+
+  const { documentos } = await api("/transparency");
+
+  if (hasRole(FINANCE)) box.append(documentForm());
+
+  if (!documentos.length) {
+    box.append(h("p", { class: "empty" }, "Todavía no se publicó ningún balance."));
+    return;
+  }
+
+  box.append(h("div", { class: "stack" }, documentos.map((d) =>
+    h("article", { class: "card" },
+      h("h2", {}, d.titulo),
+      // "T00:00:00" evita que la fecha se corra un día por la zona horaria
+      h("small", { class: "muted" },
+        new Date(`${d.periodo}T00:00:00`).toLocaleDateString("es-AR", { month: "long", year: "numeric" })),
+      h("p", {}, h("a", { class: "link", href: d.archivo_url, target: "_blank", rel: "noopener noreferrer" }, "Ver documento")),
+    ))));
+}
+
+function documentForm() {
+  const titulo = h("input", { id: "td-titulo", maxlength: "200" });
+  const periodo = h("input", { id: "td-periodo", type: "month" });
+  const url = h("input", { id: "td-url", type: "url", maxlength: "500", placeholder: "https://..." });
+  const error = h("p", { class: "field-error", role: "alert" });
+
+  const submit = (event) => {
+    event.preventDefault();
+    run(async () => {
+      error.textContent = "";
+      try {
+        await api("/transparency", {
+          method: "POST",
+          body: { titulo: titulo.value.trim(), periodo: periodo.value, archivo_url: url.value.trim() },
+        });
+        toast("Balance publicado.");
+        await loadTransparencia();
+      } catch (err) {
+        error.textContent = err.message;
+      }
+    });
+  };
+
+  return h("section", { class: "card" }, h("h2", {}, "Publicar balance"),
+    h("form", { novalidate: true, onsubmit: submit },
+      h("div", { class: "form-grid" },
+        h("div", { class: "field" }, h("label", { for: "td-titulo" }, "Título"), titulo),
+        h("div", { class: "field" }, h("label", { for: "td-periodo" }, "Mes"), periodo),
+      ),
+      h("div", { class: "field" }, h("label", { for: "td-url" }, "Enlace al documento"), url),
+      error,
+      h("div", { class: "actions" }, h("button", { class: "btn", type: "submit" }, "Publicar"))));
 }
 
 /* ---------- Inicio ---------- */

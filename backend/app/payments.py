@@ -5,16 +5,18 @@ from uuid import uuid4
 from flask import Blueprint, current_app, g, jsonify, request
 
 from .auth import is_admin, jwt_required, roles_required
-from .db import fetch_all, fetch_one, transaction, get_db
+from .db import fetch_all, fetch_one, get_db, transaction
 from .errors import APIError
-from .utils import body, integer, pagination, require_row
 from .tickets import generate_tickets
+from .utils import body, integer, pagination, require_row
 
 
 bp = Blueprint("payments", __name__, url_prefix="/api")
 
 
 MANAGER_ROLES = {"ADMIN", "COOPERADORA", "STAFF"}
+EXPIRY_PREFIXES = ("/api/products", "/api/orders", "/api/payments")
+
 
 def ensure_simulation():
     if not current_app.config["SIMULATED_PAYMENTS_ENABLED"]:
@@ -107,7 +109,6 @@ def restore_stock(cursor, order_id):
             "WHERE id_variante = %s",
             (stock, detail["id_variante"]),
         )
-EXPIRY_PREFIXES = ("/api/products", "/api/orders", "/api/payments")
 
 
 def release_expired_orders(limit=50):
@@ -185,6 +186,7 @@ def release_expired_before_request():
 def release_expired_endpoint():
     return jsonify(liberados=release_expired_orders(limit=500))
 
+
 @bp.post("/orders")
 @jwt_required
 def create_order():
@@ -227,7 +229,9 @@ def create_order():
         for variant_id in sorted(quantities):
             cursor.execute(
                 """
-                SELECT v.id_variante, v.stock, p.precio, p.activo
+                SELECT v.id_variante, v.stock, p.precio, p.activo,
+                       (p.es_evento AND p.fecha_evento <= NOW())
+                           AS evento_pasado
                 FROM variante_producto v
                 JOIN producto p ON p.id_producto = v.id_producto
                 WHERE v.id_variante = %s
@@ -244,6 +248,11 @@ def create_order():
 
             if not variant["activo"]:
                 raise APIError("Uno de los productos está inactivo.", 409)
+
+            if variant["evento_pasado"]:
+                raise APIError(
+                    "El evento de uno de los productos ya pasó.", 409
+                )
 
             if variant["stock"] < quantity:
                 raise APIError(
@@ -329,6 +338,7 @@ def list_orders():
         per_page=limit,
     )
 
+
 @bp.get("/orders/<int:order_id>")
 @jwt_required
 def get_order(order_id):
@@ -378,7 +388,7 @@ def create_payment(order_id):
     data = body({"metodo"})
     method = data.get("metodo", "MERCADO_PAGO")
 
-    if method not in {"MERCADO_PAGO", "TRANSFERENCIA"}:
+    if method != "MERCADO_PAGO":
         raise APIError("Método de pago no permitido.")
 
     with transaction() as cursor:
@@ -501,8 +511,9 @@ def process_payment_result(payment_id, result, check_owner=False):
             "UPDATE pedido SET estado = %s WHERE id_pedido = %s",
             (result, order["id_pedido"]),
         )
+
         if result == "APPROVED":
-            generate_tickets(cursor, order)        
+            generate_tickets(cursor, order)
 
     return {
         "id_pago": payment_id,

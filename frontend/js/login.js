@@ -98,6 +98,8 @@ form.addEventListener("submit", async (event) => {
         setFieldError(passwordInput, passwordError, "Revisá tu email y contraseña.");
         emailInput.setAttribute("aria-invalid", "true");
         showDialog(false, "Login fallido", "Email o contraseña incorrectos.");
+      } else if (response.status === 429) {
+        showDialog(false, "Demasiados intentos", "Esperá un minuto y probá de nuevo.");
       } else if (response.status >= 500) {
         showDialog(false, "Login fallido", "Hubo un problema en el servidor. Probá de nuevo más tarde.");
       } else {

@@ -48,26 +48,6 @@ def event_values(data):
         end,
     )
 
-def check_overlap(cursor, values, exclude_id=0):
-    space_id, start, end = values[0], values[4], values[5]
-
-    cursor.execute(
-        """
-        SELECT titulo FROM evento
-        WHERE id_espacio = %s
-          AND fecha_inicio < %s AND fecha_fin > %s
-          AND id_evento <> %s
-        LIMIT 1 FOR UPDATE
-        """,
-        (space_id, end, start, exclude_id),
-    )
-    clash = cursor.fetchone()
-
-    if clash is not None:
-        raise APIError(
-            f"El espacio ya está reservado: «{clash['titulo']}».",
-            409,
-        )
 
 # ----------------------------------------------------------------------
 # Disponibilidad de espacios
@@ -342,7 +322,6 @@ def create_event():
 
     with transaction() as cursor:
         ensure_available(cursor, values[0], values[4], values[5])
-        check_overlap(cursor, values)        
 
         cursor.execute(
             """
@@ -393,8 +372,6 @@ def update_event(event_id):
             values[5],
             exclude_id=event_id,
         )
-        values = event_values(current)
-        check_overlap(cursor, values, event_id)
 
         cursor.execute(
             """

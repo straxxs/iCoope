@@ -369,6 +369,10 @@ def update_product(product_id):
         if current["fecha_evento"] is not None:
             current["fecha_evento"] = current["fecha_evento"].isoformat()
 
+        # Si deja de ser evento y no se manda fecha, se limpia la anterior.
+        if data.get("es_evento") is False and "fecha_evento" not in data:
+            current["fecha_evento"] = None
+
         current.update(data)
         values = product_values(current)
 
@@ -589,6 +593,7 @@ def delete_image(image_id):
         )
 
     return jsonify(message="Imagen eliminada.")
+
 
 @bp.get("/inventory")
 @roles_required(*MANAGERS)

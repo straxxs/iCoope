@@ -94,6 +94,7 @@ CREATE TABLE producto (
 
 -- Las variantes permiten manejar talles, modelos, etc.
 -- Un producto puede tener una o muchas variantes.
+-- En las entradas a eventos, el stock de la variante es el aforo.
 CREATE TABLE variante_producto (
     id_variante INT AUTO_INCREMENT PRIMARY KEY,
     id_producto INT NOT NULL,
@@ -136,55 +137,8 @@ CREATE TABLE producto_imagen (
 
 
 -- ============================================================
--- 3. CARRITO
--- ============================================================
-
-CREATE TABLE carrito (
-    id_carrito INT AUTO_INCREMENT PRIMARY KEY,
-    id_usuario INT NOT NULL,
-    estado ENUM(
-        'ACTIVO',
-        'CONVERTIDO',
-        'ABANDONADO'
-    ) NOT NULL DEFAULT 'ACTIVO',
-    fecha_creacion DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT fk_carrito_usuario
-        FOREIGN KEY (id_usuario)
-        REFERENCES usuario(id_usuario)
-        ON DELETE CASCADE
-        ON UPDATE CASCADE
-) ENGINE=InnoDB;
-
-
-CREATE TABLE detalle_carrito (
-    id_detalle_carrito INT AUTO_INCREMENT PRIMARY KEY,
-    id_carrito INT NOT NULL,
-    id_variante INT NOT NULL,
-    cantidad INT NOT NULL,
-
-    CONSTRAINT uq_carrito_variante
-        UNIQUE (id_carrito, id_variante),
-
-    CONSTRAINT fk_detalle_carrito_carrito
-        FOREIGN KEY (id_carrito)
-        REFERENCES carrito(id_carrito)
-        ON DELETE CASCADE
-        ON UPDATE CASCADE,
-
-    CONSTRAINT fk_detalle_carrito_variante
-        FOREIGN KEY (id_variante)
-        REFERENCES variante_producto(id_variante)
-        ON DELETE RESTRICT
-        ON UPDATE CASCADE,
-
-    CONSTRAINT chk_detalle_carrito_cantidad
-        CHECK (cantidad > 0)
-) ENGINE=InnoDB;
-
-
--- ============================================================
--- 4. PEDIDOS
+-- 3. PEDIDOS
+-- (el carrito vive en el navegador hasta que se crea el pedido)
 -- ============================================================
 
 CREATE TABLE pedido (
@@ -240,17 +194,14 @@ CREATE TABLE detalle_pedido (
 
 
 -- ============================================================
--- 5. PAGOS
+-- 4. PAGOS (simulados)
 -- ============================================================
 
 CREATE TABLE pago (
     id_pago INT AUTO_INCREMENT PRIMARY KEY,
     id_pedido INT NOT NULL,
 
-    metodo ENUM(
-        'MERCADO_PAGO',
-        'TRANSFERENCIA'
-    ) NOT NULL,
+    metodo ENUM('MERCADO_PAGO') NOT NULL,
 
     estado ENUM(
         'PENDING',
@@ -264,6 +215,10 @@ CREATE TABLE pago (
     comprobante VARCHAR(500),
     fecha_pago DATETIME NULL,
 
+    -- Un único intento de pago por pedido (la API ya lo exige).
+    CONSTRAINT uq_pago_pedido
+        UNIQUE (id_pedido),
+
     CONSTRAINT fk_pago_pedido
         FOREIGN KEY (id_pedido)
         REFERENCES pedido(id_pedido)
@@ -276,7 +231,7 @@ CREATE TABLE pago (
 
 
 -- ============================================================
--- 6. TICKETS QR PARA EVENTOS
+-- 5. TICKETS QR PARA EVENTOS
 -- ============================================================
 
 CREATE TABLE ticket_qr (
@@ -298,7 +253,7 @@ CREATE TABLE ticket_qr (
 
 
 -- ============================================================
--- 7. FORO / NOVEDADES
+-- 6. FORO / NOVEDADES
 -- ============================================================
 
 CREATE TABLE publicacion (
@@ -326,7 +281,7 @@ CREATE TABLE publicacion (
 
 
 -- ============================================================
--- 8. CALENDARIO Y ESPACIOS
+-- 7. CALENDARIO Y ESPACIOS
 -- ============================================================
 
 CREATE TABLE espacio (
@@ -365,119 +320,7 @@ CREATE TABLE evento (
 
 
 -- ============================================================
--- 9. VOLUNTARIADOS
--- ============================================================
-
-CREATE TABLE franja_voluntariado (
-    id_franja INT AUTO_INCREMENT PRIMARY KEY,
-    id_evento INT NOT NULL,
-
-    actividad VARCHAR(150) NOT NULL,
-    fecha_hora_inicio DATETIME NOT NULL,
-    fecha_hora_fin DATETIME NOT NULL,
-    cupo INT NOT NULL DEFAULT 1,
-
-    CONSTRAINT fk_franja_evento
-        FOREIGN KEY (id_evento)
-        REFERENCES evento(id_evento)
-        ON DELETE CASCADE
-        ON UPDATE CASCADE,
-
-    CONSTRAINT chk_franja_fechas
-        CHECK (fecha_hora_fin > fecha_hora_inicio),
-
-    CONSTRAINT chk_franja_cupo
-        CHECK (cupo > 0)
-) ENGINE=InnoDB;
-
-
-CREATE TABLE inscripcion_voluntariado (
-    id_inscripcion INT AUTO_INCREMENT PRIMARY KEY,
-    id_franja INT NOT NULL,
-    id_usuario INT NOT NULL,
-    fecha_inscripcion DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT uq_inscripcion_franja_usuario
-        UNIQUE (id_franja, id_usuario),
-
-    CONSTRAINT fk_inscripcion_franja
-        FOREIGN KEY (id_franja)
-        REFERENCES franja_voluntariado(id_franja)
-        ON DELETE CASCADE
-        ON UPDATE CASCADE,
-
-    CONSTRAINT fk_inscripcion_usuario
-        FOREIGN KEY (id_usuario)
-        REFERENCES usuario(id_usuario)
-        ON DELETE CASCADE
-        ON UPDATE CASCADE
-) ENGINE=InnoDB;
-
-
--- ============================================================
--- 10. CUOTAS SOCIALES
--- ============================================================
-
-CREATE TABLE cuota_social (
-    id_cuota INT AUTO_INCREMENT PRIMARY KEY,
-    id_usuario INT NOT NULL,
-
-    periodo DATE NOT NULL,
-    monto DECIMAL(10,2) NOT NULL,
-
-    estado ENUM(
-        'PENDIENTE',
-        'PAGADA',
-        'VENCIDA'
-    ) NOT NULL DEFAULT 'PENDIENTE',
-
-    fecha_pago DATETIME NULL,
-
-    CONSTRAINT uq_cuota_usuario_periodo
-        UNIQUE (id_usuario, periodo),
-
-    CONSTRAINT fk_cuota_usuario
-        FOREIGN KEY (id_usuario)
-        REFERENCES usuario(id_usuario)
-        ON DELETE RESTRICT
-        ON UPDATE CASCADE,
-
-    CONSTRAINT chk_cuota_monto
-        CHECK (monto >= 0)
-) ENGINE=InnoDB;
-
-
--- ============================================================
--- 11. DONACIONES
--- ============================================================
-
-CREATE TABLE donacion (
-    id_donacion INT AUTO_INCREMENT PRIMARY KEY,
-    id_usuario INT NOT NULL,
-
-    monto DECIMAL(10,2) NOT NULL,
-    metodo_pago VARCHAR(50) NOT NULL,
-    estado ENUM(
-        'PENDIENTE',
-        'APROBADA',
-        'RECHAZADA'
-    ) NOT NULL DEFAULT 'PENDIENTE',
-
-    fecha_donacion DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT fk_donacion_usuario
-        FOREIGN KEY (id_usuario)
-        REFERENCES usuario(id_usuario)
-        ON DELETE RESTRICT
-        ON UPDATE CASCADE,
-
-    CONSTRAINT chk_donacion_monto
-        CHECK (monto > 0)
-) ENGINE=InnoDB;
-
-
--- ============================================================
--- 12. TRANSPARENCIA
+-- 8. TRANSPARENCIA
 -- ============================================================
 
 CREATE TABLE documento_transparencia (
@@ -501,77 +344,9 @@ CREATE TABLE documento_transparencia (
 
 
 -- ============================================================
--- 13. ENCUESTAS
+-- 9. ÍNDICES PARA MEJORAR CONSULTAS
+-- (email, hash_qr y pago.id_pedido ya tienen índice por su UNIQUE)
 -- ============================================================
-
-CREATE TABLE encuesta (
-    id_encuesta INT AUTO_INCREMENT PRIMARY KEY,
-    id_creador INT NOT NULL,
-
-    pregunta TEXT NOT NULL,
-    fecha_inicio DATETIME NOT NULL,
-    fecha_fin DATETIME NOT NULL,
-    activa BOOLEAN NOT NULL DEFAULT TRUE,
-
-    CONSTRAINT fk_encuesta_creador
-        FOREIGN KEY (id_creador)
-        REFERENCES usuario(id_usuario)
-        ON DELETE RESTRICT
-        ON UPDATE CASCADE,
-
-    CONSTRAINT chk_encuesta_fechas
-        CHECK (fecha_fin > fecha_inicio),
-
-    CONSTRAINT chk_encuesta_pregunta
-        CHECK (CHAR_LENGTH(TRIM(pregunta)) > 0)
-) ENGINE=InnoDB;
-
-
-CREATE TABLE opcion_encuesta (
-    id_opcion INT AUTO_INCREMENT PRIMARY KEY,
-    id_encuesta INT NOT NULL,
-
-    texto VARCHAR(200) NOT NULL,
-
-    CONSTRAINT fk_opcion_encuesta
-        FOREIGN KEY (id_encuesta)
-        REFERENCES encuesta(id_encuesta)
-        ON DELETE CASCADE
-        ON UPDATE CASCADE,
-
-    CONSTRAINT uq_opcion_encuesta
-        UNIQUE (id_encuesta, texto)
-) ENGINE=InnoDB;
-
-CREATE TABLE voto (
-    id_voto INT AUTO_INCREMENT PRIMARY KEY,
-    id_opcion INT NOT NULL,
-    id_usuario INT NOT NULL,
-
-    fecha_voto DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT uq_voto_usuario_encuesta
-        UNIQUE (id_usuario, id_opcion),
-
-    CONSTRAINT fk_voto_opcion
-        FOREIGN KEY (id_opcion)
-        REFERENCES opcion_encuesta(id_opcion)
-        ON DELETE CASCADE
-        ON UPDATE CASCADE,
-
-    CONSTRAINT fk_voto_usuario
-        FOREIGN KEY (id_usuario)
-        REFERENCES usuario(id_usuario)
-        ON DELETE CASCADE
-        ON UPDATE CASCADE
-) ENGINE=InnoDB;
-
--- ============================================================
--- 14. ÍNDICES PARA MEJORAR CONSULTAS
--- ============================================================
-
-CREATE INDEX idx_usuario_email
-    ON usuario(email);
 
 CREATE INDEX idx_producto_categoria
     ON producto(id_categoria);
@@ -579,20 +354,15 @@ CREATE INDEX idx_producto_categoria
 CREATE INDEX idx_variante_producto
     ON variante_producto(id_producto);
 
-CREATE INDEX idx_carrito_usuario_estado
-    ON carrito(id_usuario, estado);
-
 CREATE INDEX idx_pedido_usuario
     ON pedido(id_usuario);
 
-CREATE INDEX idx_pedido_estado
-    ON pedido(estado);
+-- Acelera la liberación de reservas vencidas (corre en cada request).
+CREATE INDEX idx_pedido_reserva
+    ON pedido(estado, fecha_vencimiento_reserva);
 
 CREATE INDEX idx_detalle_pedido_pedido
     ON detalle_pedido(id_pedido);
-
-CREATE INDEX idx_pago_pedido
-    ON pago(id_pedido);
 
 CREATE INDEX idx_publicacion_fecha
     ON publicacion(fecha_publicacion);
@@ -603,18 +373,9 @@ CREATE INDEX idx_evento_fecha
 CREATE INDEX idx_evento_espacio_fecha
     ON evento(id_espacio, fecha_inicio, fecha_fin);
 
-CREATE INDEX idx_cuota_usuario
-    ON cuota_social(id_usuario);
-
-CREATE INDEX idx_donacion_usuario
-    ON donacion(id_usuario);
-
-CREATE INDEX idx_voto_usuario
-    ON voto(id_usuario);
-
 
 -- ============================================================
--- 15. DATOS INICIALES DE ROLES
+-- 10. DATOS INICIALES DE ROLES
 -- ============================================================
 
 INSERT INTO rol (nombre) VALUES

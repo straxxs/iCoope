@@ -41,3 +41,13 @@ def init_app(app):
     @app.errorhandler(HTTPException)
     def http_error(error):
         return jsonify(error=error.description), error.code
+
+    @app.errorhandler(Exception)
+    def unexpected_error(error):
+        # En desarrollo y en tests se deja pasar para ver el traceback real.
+        if current_app.debug or current_app.testing:
+            raise error
+
+        current_app.logger.exception("Error no controlado.")
+
+        return jsonify(error="Error interno del servidor."), 500
