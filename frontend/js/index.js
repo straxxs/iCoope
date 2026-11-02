@@ -784,9 +784,9 @@ function ticketCard(t) {
   let picture;
   try {
     const qr = qrcode(0, "M");
-    qr.addData(t.hash_qr);
+    qr.addData(t.hash_qr.toUpperCase(), "Alphanumeric");
     qr.make();
-    picture = h("img", { class: "qr", alt: "Código QR de la entrada", src: qr.createDataURL(6, 2) });
+    picture = h("img", { class: "qr", alt: "Código QR de la entrada", src: qr.createDataURL(8, 4) });
   } catch {
     picture = h("p", { class: "muted" }, "No se pudo dibujar el QR. Mostrá el código de abajo.");
   }
