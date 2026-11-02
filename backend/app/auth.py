@@ -14,7 +14,7 @@ from werkzeug.security import (
 from .db import fetch_all, fetch_one, transaction
 from .errors import APIError
 from .extensions import limiter
-from .utils import body, text
+from utils import body, text
 
 
 bp = Blueprint("auth", __name__, url_prefix="/api/auth")
