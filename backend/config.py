@@ -49,3 +49,9 @@ class Config:
 
     # Límite de intentos (Flask-Limiter).
     RATELIMIT_STORAGE_URI = "memory://"
+
+    DB_SSL = os.environ.get("DB_SSL", "false").lower() == "true"
+    DB_SSL_CA = os.environ.get(
+        "DB_SSL_CA",
+        "/etc/ssl/certs/ca-certificates.crt",
+    )

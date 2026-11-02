@@ -7,19 +7,28 @@ from pymysql.cursors import DictCursor
 
 def get_db():
     if "db" not in g:
-        g.db = pymysql.connect(
-            host=current_app.config["DB_HOST"],
-            port=current_app.config["DB_PORT"],
-            user=current_app.config["DB_USER"],
-            password=current_app.config["DB_PASSWORD"],
-            database=current_app.config["DB_NAME"],
-            charset="utf8mb4",
-            cursorclass=DictCursor,
-            autocommit=False,
-            connect_timeout=current_app.config["DB_CONNECT_TIMEOUT"],
-            read_timeout=current_app.config["DB_READ_TIMEOUT"],
-            write_timeout=current_app.config["DB_WRITE_TIMEOUT"],
-        )
+        connection_params = {
+            "host": current_app.config["DB_HOST"],
+            "port": current_app.config["DB_PORT"],
+            "user": current_app.config["DB_USER"],
+            "password": current_app.config["DB_PASSWORD"],
+            "database": current_app.config["DB_NAME"],
+            "charset": "utf8mb4",
+            "cursorclass": DictCursor,
+            "autocommit": False,
+            "connect_timeout": current_app.config["DB_CONNECT_TIMEOUT"],
+            "read_timeout": current_app.config["DB_READ_TIMEOUT"],
+            "write_timeout": current_app.config["DB_WRITE_TIMEOUT"],
+        }
+
+        if current_app.config.get("DB_SSL", False):
+            connection_params.update({
+                "ssl_ca": current_app.config["DB_SSL_CA"],
+                "ssl_verify_cert": True,
+                "ssl_verify_identity": True,
+            })
+
+        g.db = pymysql.connect(**connection_params)
 
     return g.db
 
